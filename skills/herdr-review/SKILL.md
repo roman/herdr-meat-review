@@ -70,8 +70,15 @@ It prints one JSON object. Keep the `cwd` it reports: that is the repository
 the review session belongs to, and you need it again to read the comments.
 
 ```json
-{"pane_id":"w1:p4","tab_id":"w1:t4","cwd":"/home/you/project","reused":false}
+{"pane_id":"w1:p4","tab_id":"w1:t4","cwd":"/home/you/project","reused":false,
+ "summary":"6 files to review","empty":false}
 ```
+
+**Check `empty` before you tell anyone a review is waiting.** tuicr quits at
+once when it is given nothing to show, which closes the tab and releases the
+pane, so `"empty": true` means the review has already gone. Say so and ask
+what to review, rather than polling for a reviewer who was never shown
+anything.
 
 What it does, in order: creates a tab labelled `review` in the workspace,
 reports that pane to herdr as a blocked `review` agent, and starts tuicr in
@@ -85,6 +92,20 @@ With no tuicr arguments, `open` shows what has arrived since the previous
 review — not the whole branch again. Every review leaves a marker at the
 commit it opened on, under `refs/reviews/<n>`, and the next one starts
 there. `herdr-review marks` lists them.
+
+The first review of a branch has no marker to start from, so it uses the
+branch point: everything the branch has that the default one does not.
+
+**On the default branch itself there is no branch point**, so a first review
+there is the working tree and nothing else. The same happens where the
+default branch cannot be worked out at all — `origin/HEAD` is set by `git
+clone` and by nothing else, so a repository that started local and is not on
+`main` or `master` has nothing to measure against. Both show up as
+`"empty": true`, and the answer is to name a range yourself:
+
+```bash
+herdr-review open --cwd "$PWD" -- --revisions <the commits you want>..HEAD
+```
 
 Uncommitted work is shown every time, because nothing can record that it was
 seen. **So commit before asking for a review.** Work you leave uncommitted

@@ -20,7 +20,12 @@ herdr-review marks                 # what has been reviewed so far
 With no arguments, a review shows **what has arrived since the last one**.
 Each review leaves a marker at the commit it opened on, under
 `refs/reviews/<n>`, and the next starts there — so reviewing a branch twice
-does not mean reading it twice.
+does not mean reading it twice. The first review has no marker to start
+from and uses the branch point instead: everything this branch has that the
+default one does not. On the default branch there is no branch point, so a
+first review there is the working tree alone — `open` reports that as
+`"empty": true` rather than leaving you to find out from a tab that closed
+itself.
 
 `open` creates a tab called `review` in the workspace, starts tuicr in it, and
 prints the pane and tab it used. Quitting the tuicr TUI closes that tab again.

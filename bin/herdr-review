@@ -17,8 +17,9 @@
 #
 # With no tuicr arguments, a review shows what has arrived since the last
 # one: each review leaves a marker under refs/reviews/<n>, and the next
-# starts there.  Uncommitted work is always shown, because no marker can
-# record that it was seen.
+# starts there.  The first review of a branch has no marker and uses the
+# branch point instead.  Uncommitted work is always shown, because no
+# marker can record that it was seen.
 #
 # Usage:
 #   herdr-review open   [--workspace ID] [--cwd DIR] [--focus] [-- TUICR-ARG...]
@@ -135,6 +136,11 @@ workspace_cwd() {
 # refs/reviews/<n>.  The next review starts there, so a reviewer reads what
 # arrived since they last looked instead of the whole branch again.
 #
+# Before there is a marker to start from, the branch point does the same
+# job: what this branch has that the default one does not.  Which matters
+# because the operator is told to commit before asking for a review, and
+# without it doing so produced a review with nothing in it.
+#
 # The markers track commits only.  Uncommitted work is shown every time,
 # because nothing can record that it was seen; commit before asking for a
 # review and the marker can do its job.
@@ -168,21 +174,87 @@ mark_reviewed() {
   printf '%s\n' "$next"
 }
 
+is_ancestor() {
+  local dir=$1 maybe=$2 descendant=$3
+  git -C "$dir" merge-base --is-ancestor "$maybe" "$descendant" 2>/dev/null
+}
+
+default_branch() {
+  # What a branch is measured against before any review has happened.
+  #
+  # origin's own HEAD first, because that is the remote's own answer where
+  # somebody has one.  Only `git clone' sets it, so a repository that
+  # started local and gained a remote has none, and the rest is guesswork:
+  # the name git would have made, then the two it is nearly always one of.
+  local dir=$1 name
+  name=$(git -C "$dir" symbolic-ref --quiet --short \
+    refs/remotes/origin/HEAD 2>/dev/null) || name=
+  if [ -n "$name" ]; then
+    printf '%s\n' "$name"
+    return 0
+  fi
+  local -a candidates=(main master)
+  name=$(git -C "$dir" config --get init.defaultBranch 2>/dev/null) || name=
+  [ -z "$name" ] || candidates=("$name" "${candidates[@]}")
+  for name in "${candidates[@]}"; do
+    if git -C "$dir" rev-parse --verify -q "refs/heads/$name" >/dev/null; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+branch_point() {
+  # Where this branch left the default one, which is the honest answer to
+  # "what is here that has not been seen" when no marker has recorded it.
+  #
+  # The merge base rather than the branch tip, because the range is read
+  # as a diff: against the tip, every file the default branch gained since
+  # would reach the reviewer as a deletion.
+  local dir=$1 base
+  base=$(default_branch "$dir") || return 1
+  git -C "$dir" merge-base HEAD "$base" 2>/dev/null
+}
+
+review_start() {
+  # Where this review begins: the newest thing already seen.
+  #
+  # The marker, but only where it is behind HEAD.  `refs/reviews' lives in
+  # the common git directory, so it is shared by every branch and every
+  # linked worktree of the repository — a marker left on another branch
+  # names a commit this one does not contain, and a range from there shows
+  # that branch's work as a deletion.
+  #
+  # A marker behind HEAD but older than the branch point is still the
+  # right answer, not the branch point: what lies between them is default
+  # branch work that landed after the last review, and nobody has read
+  # that either.
+  local dir=$1 last
+  last=$(last_mark "$dir")
+  if [ -n "$last" ] && is_ancestor "$dir" "refs/reviews/$last" HEAD; then
+    printf '%s\n' "refs/reviews/$last"
+    return 0
+  fi
+  branch_point "$dir"
+}
+
 unreviewed_args() {
   # The tuicr arguments for everything not yet reviewed, one per line.
-  local dir=$1 last from
+  #
+  # A review that comes out empty is left empty rather than widened: the
+  # caller reports that, and showing the whole history instead would make
+  # a first review unreadable in any repository with a past.
+  local dir=$1 from
   if ! git_repo "$dir" || ! git -C "$dir" rev-parse --verify -q HEAD >/dev/null
   then
     printf -- '--working-tree\n'
     return 0
   fi
-  last=$(last_mark "$dir")
-  if [ -n "$last" ]; then
-    from="refs/reviews/$last"
-    if [ "$(git -C "$dir" rev-parse "$from")" != \
-         "$(git -C "$dir" rev-parse HEAD)" ]; then
-      printf -- '--revisions\n%s..HEAD\n' "$from"
-    fi
+  from=$(review_start "$dir") || from=
+  if [ -n "$from" ] && [ "$(git -C "$dir" rev-parse "$from")" != \
+                         "$(git -C "$dir" rev-parse HEAD)" ]; then
+    printf -- '--revisions\n%s..HEAD\n' "$from"
   fi
   printf -- '--working-tree\n'
 }
@@ -311,7 +383,7 @@ cmd_open() {
 
   # Arguments given win: someone naming a range means that range, not
   # whatever is unreviewed.  With none, show what has arrived since the
-  # last review.
+  # last review, or since the branch point before there has been one.
   local -a review_args=("$@")
   if [ ${#review_args[@]} -eq 0 ]; then
     mapfile -t review_args < <(unreviewed_args "$directory")
@@ -326,8 +398,18 @@ cmd_open() {
   fi
   herdr pane run "$pane" "$command" >/dev/null
 
+  # An empty review is worth saying out loud.  tuicr quits at once when it
+  # is given nothing, which closes the tab and releases the pane, so a
+  # caller that only read "reused": false would report a review waiting
+  # that had already gone.
+  local summary
+  summary=$(changed_summary "$directory" "${review_args[@]}")
   jq -n --arg pane "$pane" --arg tab "$tab" --arg cwd "$directory" \
-    '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: false}'
+        --arg summary "$summary" \
+        --argjson empty "$([ "$summary" = 'nothing to review' ] &&
+                           printf true || printf false)" \
+    '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: false,
+      summary: $summary, empty: $empty}'
 }
 
 cmd_close() {

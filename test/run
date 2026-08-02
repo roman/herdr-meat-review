@@ -203,6 +203,129 @@ test_open_shows_only_what_arrived_since_the_last_review() {
     "$(git -C "$dir" rev-parse refs/reviews/2)" "second marker"
 }
 
+test_open_measures_a_first_review_against_the_default_branch() {
+  # There is no marker before the first review, and falling back to the
+  # working tree alone made that review empty for anyone who did as they
+  # were told and committed first.  The branch point is the next best
+  # answer to "what has this branch got that main has not".
+  #
+  # main moves after the branch is cut, because the branch point and the
+  # branch tip are the same commit until it does — and against the tip
+  # every file main gained since reaches the reviewer as a deletion.
+  local dir branch_point
+  dir=$(repo)
+  git -C "$dir" checkout -q -b feature
+  commit_in "$dir" two
+  branch_point=$(git -C "$dir" rev-parse HEAD~1)
+  git -C "$dir" checkout -q main
+  commit_in "$dir" elsewhere
+  git -C "$dir" checkout -q feature
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" "$branch_point..HEAD" "range"
+}
+
+test_open_asks_the_remote_which_branch_is_the_default_one() {
+  # Where origin says, that is the answer, whatever the branch is called.
+  # trunk is cut from main and then moves, so the two candidates give
+  # different branch points and the answer says which one was asked.
+  local dir
+  dir=$(repo)
+  git -C "$dir" checkout -q -b trunk
+  commit_in "$dir" on-trunk
+  git -C "$dir" update-ref refs/remotes/origin/trunk HEAD
+  git -C "$dir" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+  git -C "$dir" checkout -q -b feature
+  commit_in "$dir" two
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" "$(git -C "$dir" rev-parse trunk)..HEAD" \
+    "range"
+  case "$(host_command)" in
+    *"$(git -C "$dir" rev-parse main)"*) fail "main was used, not origin's HEAD" ;;
+  esac
+}
+
+test_open_finds_a_default_branch_that_is_not_called_main() {
+  # No origin to ask, and a repository whose default branch git would have
+  # named `develop'.  Guessing only main and master left it with no branch
+  # point, which is the empty first review all over again.
+  local dir
+  dir=$(repo)
+  git -C "$dir" config init.defaultBranch develop
+  git -C "$dir" branch -q -m develop
+  git -C "$dir" checkout -q -b feature
+  commit_in "$dir" two
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" "$(git -C "$dir" rev-parse develop)..HEAD" \
+    "range"
+}
+
+test_open_ignores_a_marker_left_on_another_branch() {
+  # refs/reviews lives in the common git directory, so every branch and
+  # every linked worktree shares the counter.  A marker naming a commit
+  # this branch does not contain would show the other branch's work as a
+  # deletion — worse than the empty review, because it looks like a review.
+  local dir branch_point
+  dir=$(repo)
+  git -C "$dir" checkout -q -b other
+  commit_in "$dir" other-work
+  "$REVIEW" open --workspace w1 >/dev/null
+  "$REVIEW" close --workspace w1 >/dev/null
+  git -C "$dir" checkout -q main
+  git -C "$dir" checkout -q -b feature
+  branch_point=$(git -C "$dir" rev-parse HEAD)
+  commit_in "$dir" mine
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" "$branch_point..HEAD" "range"
+  case "$(host_command)" in
+    *refs/reviews/1*) fail "a marker from another branch was used" ;;
+  esac
+}
+
+test_open_says_when_the_review_it_opened_is_empty() {
+  # tuicr quits at once when it is given nothing, taking the tab with it.
+  # A caller reading only "reused": false would report a review waiting
+  # that had already gone.
+  local dir reply
+  dir=$(repo)
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal true "$(printf '%s' "$reply" | jq -r .empty)" "empty"
+  assert_equal 'nothing to review' \
+    "$(printf '%s' "$reply" | jq -r .summary)" "summary"
+  printf 'dirty\n' >"$dir/file"
+  "$REVIEW" close --workspace w1 >/dev/null
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal false "$(printf '%s' "$reply" | jq -r .empty)" "not empty"
+}
+
+test_open_on_the_default_branch_has_no_branch_point_to_use() {
+  # main's merge-base with main is main, so there is no range and the
+  # review is the working tree.  Naming the whole history instead would
+  # make a first review unreadable in any repository with a past.
+  local dir
+  dir=$(repo)
+  commit_in "$dir" two
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" '--working-tree' "working tree"
+  case "$(host_command)" in
+    *--revisions*) fail "the default branch was reviewed against itself" ;;
+  esac
+}
+
+test_open_prefers_the_last_marker_to_the_branch_point() {
+  # Once a review has happened the marker is the better answer: a second
+  # review is about the work done since the first, not since the branch
+  # point again.
+  local dir
+  dir=$(repo)
+  git -C "$dir" checkout -q -b feature
+  commit_in "$dir" two
+  "$REVIEW" open --workspace w1 >/dev/null
+  "$REVIEW" close --workspace w1 >/dev/null
+  commit_in "$dir" three
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" 'refs/reviews/1..HEAD' "range"
+}
+
 test_open_shows_the_working_tree_when_nothing_was_committed() {
   # Nothing can record that uncommitted work was seen, so an empty range
   # is left out rather than passed to tuicr as HEAD..HEAD.
