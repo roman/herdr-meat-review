@@ -1,6 +1,6 @@
 ---
 name: herdr-review
-description: Get a human to review your change inside a herdr session and read their comments back. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
+description: Get a human to review your change inside a herdr session and read their comments back, each review showing only what arrived since the last one. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
 ---
 
 # herdr review
@@ -79,8 +79,30 @@ it with a one-line summary of what is waiting. The blocked state is published
 before the TUI exists, so the review is visible and the workspace's one
 review slot is taken from the moment the tab appears.
 
-To review something other than the uncommitted working tree, pass tuicr's own
-arguments after `--`:
+### Each review picks up where the last one left off
+
+With no tuicr arguments, `open` shows what has arrived since the previous
+review — not the whole branch again. Every review leaves a marker at the
+commit it opened on, under `refs/reviews/<n>`, and the next one starts
+there. `herdr-review marks` lists them.
+
+Uncommitted work is shown every time, because nothing can record that it was
+seen. **So commit before asking for a review.** Work you leave uncommitted
+is read once now and again in the next review, and the reviewer will not
+know which parts they have already been through.
+
+That leaves one rule, and it is the whole reason this works:
+
+> **Address review comments in new commits. Never `commit --amend`,
+> `rebase`, or `reset` at or below the newest marker.**
+
+Rewriting a commit the marker sits on or below moves it out from under the
+marker, and the next review replays everything the reviewer already read.
+If the user wants the branch tidied, do that after the last review, not
+between two.
+
+To review something other than that, pass tuicr's own arguments after `--`.
+They win, and the marker still moves:
 
 ```bash
 herdr-review open --cwd "$PWD" -- --revisions HEAD~3..HEAD

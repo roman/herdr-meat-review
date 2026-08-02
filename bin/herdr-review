@@ -15,10 +15,16 @@
 # When the operator quits the tuicr TUI the review releases its agent
 # authority and closes its tab, freeing the slot.
 #
+# With no tuicr arguments, a review shows what has arrived since the last
+# one: each review leaves a marker under refs/reviews/<n>, and the next
+# starts there.  Uncommitted work is always shown, because no marker can
+# record that it was seen.
+#
 # Usage:
 #   herdr-review open   [--workspace ID] [--cwd DIR] [--focus] [-- TUICR-ARG...]
 #   herdr-review close  [--workspace ID]
 #   herdr-review status [--workspace ID]
+#   herdr-review marks  [DIR]
 #   herdr-review host   TAB PANE [-- TUICR-ARG...]   (internal; runs in the pane)
 #
 # Every subcommand prints one JSON object on stdout.
@@ -123,6 +129,64 @@ workspace_cwd() {
     | first(.result.snapshot.panes[] | select(.tab_id == $tab) | .cwd) // empty'
 }
 
+# What has already been reviewed --------------------------------------------
+#
+# Each review leaves a marker at the commit it was opened on, under
+# refs/reviews/<n>.  The next review starts there, so a reviewer reads what
+# arrived since they last looked instead of the whole branch again.
+#
+# The markers track commits only.  Uncommitted work is shown every time,
+# because nothing can record that it was seen; commit before asking for a
+# review and the marker can do its job.
+
+git_repo() {
+  git -C "$1" rev-parse --git-dir >/dev/null 2>&1
+}
+
+last_mark() {
+  # The highest-numbered marker, which is the last review shown, or
+  # nothing before the first review.  Nothing is an ordinary answer, and
+  # `grep' saying so must not fail the pipeline under `pipefail'.
+  local dir=$1
+  git -C "$dir" for-each-ref --format='%(refname)' refs/reviews 2>/dev/null |
+    sed 's|^refs/reviews/||' |
+    grep -E '^[0-9]+$' |
+    sort -n |
+    tail -1 || true
+}
+
+mark_reviewed() {
+  # Record what this review is showing.  Done when the review opens rather
+  # than when it closes: what it marks is that the work was put in front of
+  # someone, which is true the moment the tab appears.
+  local dir=$1 last next
+  git_repo "$dir" || return 0
+  git -C "$dir" rev-parse --verify -q HEAD >/dev/null || return 0
+  last=$(last_mark "$dir")
+  next=$(( ${last:-0} + 1 ))
+  git -C "$dir" update-ref "refs/reviews/$next" HEAD
+  printf '%s\n' "$next"
+}
+
+unreviewed_args() {
+  # The tuicr arguments for everything not yet reviewed, one per line.
+  local dir=$1 last from
+  if ! git_repo "$dir" || ! git -C "$dir" rev-parse --verify -q HEAD >/dev/null
+  then
+    printf -- '--working-tree\n'
+    return 0
+  fi
+  last=$(last_mark "$dir")
+  if [ -n "$last" ]; then
+    from="refs/reviews/$last"
+    if [ "$(git -C "$dir" rev-parse "$from")" != \
+         "$(git -C "$dir" rev-parse HEAD)" ]; then
+      printf -- '--revisions\n%s..HEAD\n' "$from"
+    fi
+  fi
+  printf -- '--working-tree\n'
+}
+
 changed_summary() {
   # What the operator is being asked to look at, for the panel row.  Counted
   # from git rather than from tuicr, because no review session exists yet.
@@ -194,11 +258,20 @@ cmd_open() {
     return 0
   fi
 
+  # Arguments given win: someone naming a range means that range, not
+  # whatever is unreviewed.  With none, show what has arrived since the
+  # last review.
+  local -a review_args=("$@")
+  if [ ${#review_args[@]} -eq 0 ]; then
+    mapfile -t review_args < <(unreviewed_args "$directory")
+  fi
+  mark_reviewed "$directory" >/dev/null
+
   local command
   printf -v command '%q host %q %q' "$(self)" "$tab" "$pane"
-  if [ $# -gt 0 ]; then
+  if [ ${#review_args[@]} -gt 0 ]; then
     command+=' --'
-    command+=$(printf ' %q' "$@")
+    command+=$(printf ' %q' "${review_args[@]}")
   fi
   herdr pane run "$pane" "$command" >/dev/null
 
@@ -281,6 +354,20 @@ report_blocked() {
     --state blocked --message "waiting for review" >/dev/null
 }
 
+cmd_marks() {
+  local directory=${1:-$PWD}
+  require git
+  require jq
+  git_repo "$directory" || die "not a git repository: $directory"
+  git -C "$directory" for-each-ref --format='%(refname) %(objectname)' \
+    refs/reviews |
+    jq -Rs --arg head "$(git -C "$directory" rev-parse HEAD 2>/dev/null)" '
+      split("\n")
+      | map(select(length > 0) | split(" "))
+      | {head: $head,
+         marks: map({mark: (.[0] | sub("^refs/reviews/"; "")), commit: .[1]})}'
+}
+
 release() {
   local pane=$1
   herdr pane release-agent "$pane" --source "$SOURCE" --agent "$AGENT_KIND" \
@@ -325,6 +412,7 @@ main() {
     open) cmd_open "$@" ;;
     close) cmd_close "$@" ;;
     status) cmd_status "$@" ;;
+    marks) cmd_marks "$@" ;;
     host) cmd_host "$@" ;;
     -h | --help | help | '') usage ;;
     *) die "unknown command $command" ;;

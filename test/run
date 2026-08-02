@@ -84,6 +84,36 @@ state_file() {
   cat "$HERDR_STUB_STATE/$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
 }
 
+# A repository to review ------------------------------------------------------
+
+repo() {
+  # A git repository at the workspace's directory, so the marker the
+  # review leaves behind has somewhere to live.  Two commits, so there is
+  # history to slice.
+  local dir=$HERDR_STUB_STATE/repo
+  mkdir -p "$dir"
+  git -C "$dir" init -q -b main
+  git -C "$dir" config user.email test@example.com
+  git -C "$dir" config user.name Test
+  printf 'one\n' >"$dir/file"
+  git -C "$dir" add -A
+  git -C "$dir" commit -qm one
+  printf 'w1:p1 w1:t1 w1 %s\n' "$dir" >"$HERDR_STUB_STATE/panes"
+  printf '%s\n' "$dir"
+}
+
+commit_in() {
+  local dir=$1 message=$2
+  printf '%s\n' "$message" >>"$dir/file"
+  git -C "$dir" add -A
+  git -C "$dir" commit -qm "$message"
+}
+
+host_command() {
+  # What the pane was told to run, which carries the tuicr arguments.
+  grep '^pane run ' "$HERDR_STUB_STATE/log" | tail -1
+}
+
 # Tests ----------------------------------------------------------------------
 
 test_open_puts_the_review_in_a_tab_of_its_own() {
@@ -142,6 +172,77 @@ test_open_accepts_a_pane_id_past_the_ninth() {
   reply=$("$REVIEW" open --workspace w1)
   assert_equal w1:pA "$(printf '%s' "$reply" | jq -r .pane_id)" "pane"
   assert_equal w1:pA "$(state_file claims)" "claims"
+}
+
+test_open_marks_what_it_showed() {
+  # The marker is what makes the next review incremental, so it has to be
+  # left behind without being asked for.
+  local dir
+  dir=$(repo)
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_equal "$(git -C "$dir" rev-parse HEAD)" \
+    "$(git -C "$dir" rev-parse refs/reviews/1)" "marker"
+}
+
+test_open_shows_only_what_arrived_since_the_last_review() {
+  # The whole point: a second review is about the work done after the
+  # first, not the branch again.
+  local dir
+  dir=$(repo)
+  "$REVIEW" open --workspace w1 >/dev/null
+  "$REVIEW" close --workspace w1 >/dev/null
+  commit_in "$dir" two
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" '--revisions refs/reviews/1..HEAD' \
+    "range"
+  assert_equal "$(git -C "$dir" rev-parse HEAD)" \
+    "$(git -C "$dir" rev-parse refs/reviews/2)" "second marker"
+}
+
+test_open_shows_the_working_tree_when_nothing_was_committed() {
+  # Nothing can record that uncommitted work was seen, so an empty range
+  # is left out rather than passed to tuicr as HEAD..HEAD.
+  local dir
+  dir=$(repo)
+  "$REVIEW" open --workspace w1 >/dev/null
+  "$REVIEW" close --workspace w1 >/dev/null
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" '--working-tree' "working tree"
+  case "$(host_command)" in
+    *--revisions*) fail "an empty range was passed to tuicr" ;;
+  esac
+}
+
+test_open_lets_given_arguments_win() {
+  # Naming a range means that range. The marker still moves, because the
+  # work was still put in front of someone.
+  local dir
+  dir=$(repo)
+  "$REVIEW" open --workspace w1 -- --all-files >/dev/null
+  assert_contains "$(host_command)" '--all-files' "arguments"
+  case "$(host_command)" in
+    *--revisions*) fail "a computed range overrode the given arguments" ;;
+  esac
+  assert_equal "$(git -C "$dir" rev-parse HEAD)" \
+    "$(git -C "$dir" rev-parse refs/reviews/1)" "marker"
+}
+
+test_open_outside_a_repository_still_works() {
+  # /repo is not a checkout in the default fixture, and a review of a
+  # directory git knows nothing about must still open.
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" '--working-tree' "working tree"
+}
+
+test_marks_lists_what_has_been_reviewed() {
+  local dir
+  dir=$(repo)
+  "$REVIEW" open --workspace w1 >/dev/null
+  local reply
+  reply=$("$REVIEW" marks "$dir")
+  assert_equal 1 "$(printf '%s' "$reply" | jq -r '.marks | length')" "count"
+  assert_equal "$(git -C "$dir" rev-parse HEAD)" \
+    "$(printf '%s' "$reply" | jq -r '.head')" "head"
 }
 
 test_open_refuses_without_a_workspace() {

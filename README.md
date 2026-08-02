@@ -14,7 +14,13 @@ herdr-review open                  # review the working tree of this workspace
 herdr-review open -- -r HEAD~3..HEAD   # anything after -- is tuicr's
 herdr-review status                # {} once the operator is done
 herdr-review close                 # for a review somebody walked away from
+herdr-review marks                 # what has been reviewed so far
 ```
+
+With no arguments, a review shows **what has arrived since the last one**.
+Each review leaves a marker at the commit it opened on, under
+`refs/reviews/<n>`, and the next starts there — so reviewing a branch twice
+does not mean reading it twice.
 
 `open` creates a tab called `review` in the workspace, starts tuicr in it, and
 prints the pane and tab it used. Quitting the tuicr TUI closes that tab again.
@@ -57,6 +63,13 @@ From Emacs, if you use herdr.el — it ships the panel and the commands. See
 **A workspace holds one review at a time.** Asking for a second focuses the
 first and reports `"reused": true`. Two open reviews of one checkout is more
 than most people can hold at once.
+
+**Markers track commits, not the working tree.** Uncommitted work is shown
+every review, because nothing can record that you saw it — commit before
+asking for a review and the marker does its job. And the marker only holds
+if the commits under it stay put: amending or rebasing at or below the
+newest one replays everything already read. Tidy the branch after the last
+review, not between two.
 
 **The summary line counts uncommitted files.** It comes from `git status
 --porcelain` when the review opens, so a review of a commit range still
