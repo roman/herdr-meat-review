@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+#
+# A herdr that keeps its session in files, so that herdr-review can be
+# driven into states a live server would take a long time to reach — and
+# into one it cannot be asked for at all, which is two callers claiming
+# the same workspace at the same instant.
+#
+# State lives under $HERDR_STUB_STATE:
+#
+#   panes       one "PANE TAB WORKSPACE CWD" per line
+#   claims      one pane id per line, the panes reporting an agent
+#   workspaces  one "WORKSPACE ACTIVE_TAB LABEL" per line
+#   next        the counter public ids are cut from
+#   log         one line per command, for a test to assert against
+#   on-claim    optional hook, run after each report-agent
+#
+# Only the subcommands herdr-review uses are implemented.  Anything else
+# exits non-zero, so a new call site cannot pass unnoticed.
+
+set -euo pipefail
+
+state=${HERDR_STUB_STATE:?HERDR_STUB_STATE is not set}
+mkdir -p "$state"
+touch "$state/panes" "$state/claims" "$state/workspaces" "$state/log"
+
+note() {
+  printf '%s\n' "$*" >>"$state/log"
+}
+
+next_id() {
+  local n
+  n=$(cat "$state/next" 2>/dev/null || printf 2)
+  printf '%s\n' $((n + 1)) >"$state/next"
+  printf '%s\n' "$n"
+}
+
+forget() {
+  # Drop every line of FILE whose first field is FIELD.
+  local file=$1 field=$2 kept
+  kept=$(awk -v want="$field" '$1 != want' "$file")
+  printf '%s' "${kept:+$kept
+}" >"$file"
+}
+
+ok() {
+  printf '{"result":{"type":"ok"}}\n'
+}
+
+snapshot() {
+  jq -n \
+    --rawfile panes "$state/panes" \
+    --rawfile claims "$state/claims" \
+    --rawfile workspaces "$state/workspaces" '
+    def rows: split("\n") | map(select(length > 0) | split(" "));
+    ($claims | rows | map(.[0])) as $claimed
+    | {result: {snapshot: {
+        workspaces: ($workspaces | rows
+                     | map({workspace_id: .[0], active_tab_id: .[1],
+                            label: .[2]})),
+        tabs: ($panes | rows
+               | map({tab_id: .[1], workspace_id: .[2], label: "review"})),
+        panes: ($panes | rows
+                | map({pane_id: .[0], tab_id: .[1], workspace_id: .[2],
+                       cwd: .[3]})),
+        agents: ($panes | rows | map(select(.[0] as $p | $claimed | index($p)))
+                 | map({pane_id: .[0], tab_id: .[1], workspace_id: .[2],
+                        cwd: .[3], agent: "tuicr", agent_status: "blocked"}))
+      }}}'
+}
+
+tab_create() {
+  local workspace='' cwd=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --workspace) workspace=$2; shift 2 ;;
+      --cwd) cwd=$2; shift 2 ;;
+      --label) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  local n tab pane
+  n=$(next_id)
+  tab="$workspace:t$n"
+  pane="$workspace:p$n"
+  printf '%s %s %s %s\n' "$pane" "$tab" "$workspace" "$cwd" >>"$state/panes"
+  jq -n --arg tab "$tab" --arg pane "$pane" \
+    '{result: {tab: {tab_id: $tab}, root_pane: {pane_id: $pane}}}'
+}
+
+claim() {
+  local pane=$1
+  grep -qxF "$pane" "$state/claims" || printf '%s\n' "$pane" >>"$state/claims"
+  if [ -x "$state/on-claim" ]; then
+    "$state/on-claim" "$pane"
+  fi
+  ok
+}
+
+case "${1:-} ${2:-}" in
+  "api snapshot") snapshot ;;
+  "tab create") shift 2; tab_create "$@" ;;
+  "tab close")
+    note "tab close $3"
+    awk -v want="$3" '$2 == want {print $1}' "$state/panes" |
+      while read -r pane; do forget "$state/claims" "$pane"; done
+    awk -v want="$3" '$2 != want' "$state/panes" >"$state/panes.new"
+    mv "$state/panes.new" "$state/panes"
+    ok
+    ;;
+  "pane report-agent") note "report-agent $3"; claim "$3" ;;
+  "pane report-metadata") note "report-metadata $3"; ok ;;
+  "pane release-agent")
+    note "release-agent $3"
+    forget "$state/claims" "$3"
+    ok
+    ;;
+  "pane run") note "pane run $3 ${4:-}"; ok ;;
+  "agent focus") note "agent focus $3"; ok ;;
+  *)
+    printf 'stub herdr: unimplemented: %s\n' "$*" >&2
+    exit 64
+    ;;
+esac

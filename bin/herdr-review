@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+#
+# herdr-review — run a tuicr review as a first-class herdr agent.
+#
+# A review lives in its own tab of the workspace being reviewed, labelled
+# "review", and reports itself to herdr as an agent of kind "tuicr" in the
+# blocked state.  herdr rolls that state up to the tab and the workspace, so
+# a waiting review reaches every herdr client without any of them knowing
+# what tuicr is.
+#
+# A workspace holds at most one review.  Asking for a second focuses the
+# first, because two reviews of one checkout is more than an operator can
+# hold at once.
+#
+# When the operator quits the tuicr TUI the review releases its agent
+# authority and closes its tab, freeing the slot.
+#
+# Usage:
+#   herdr-review open   [--workspace ID] [--cwd DIR] [--focus] [-- TUICR-ARG...]
+#   herdr-review close  [--workspace ID]
+#   herdr-review status [--workspace ID]
+#   herdr-review host   TAB PANE [-- TUICR-ARG...]   (internal; runs in the pane)
+#
+# Every subcommand prints one JSON object on stdout.
+
+set -euo pipefail
+
+# Not configurable: herdr-tuicr.el reads the same kind back out of the
+# session, and one of the two would always be free to disagree.
+readonly AGENT_KIND=tuicr
+readonly SOURCE="custom:herdr-review"
+readonly TAB_LABEL=review
+
+self() {
+  # Resolved so the pane runs this same file, whatever PATH it has.  By
+  # hand rather than with `readlink -f', which is GNU-only.
+  local path=${BASH_SOURCE[0]} target
+  while [ -L "$path" ]; do
+    target=$(readlink "$path")
+    case $target in
+      /*) path=$target ;;
+      *) path=$(dirname "$path")/$target ;;
+    esac
+  done
+  printf '%s\n' "$(cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
+}
+
+valid_id() {
+  # herdr's public ids, which are interpolated into the exit trap below
+  # and into a command the pane's shell runs.
+  [[ $1 =~ ^w[0-9A-Za-z]+:[pt][0-9]+$ ]]
+}
+
+die() {
+  printf 'herdr-review: %s\n' "$*" >&2
+  exit 1
+}
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is not on PATH"
+}
+
+usage() {
+  sed -n '/^# Usage:/,/^# Every/p' "$(self)" | sed 's/^# \{0,1\}//'
+}
+
+# Resolving what to act on ----------------------------------------------------
+
+workspace_of() {
+  # The workspace named on the command line, else the one this process runs
+  # in.  herdr injects the latter into every pane it starts.
+  local given=$1
+  printf '%s\n' "${given:-${HERDR_WORKSPACE_ID:-}}"
+}
+
+SNAPSHOT=
+
+snapshot() {
+  # Read once per run.  A subcommand asks several questions of the tree
+  # and wants one answer to all of them, not a tree that moved between
+  # the pane it found and the tab that pane is in.
+  [ -n "$SNAPSHOT" ] || SNAPSHOT=$(herdr api snapshot)
+  printf '%s\n' "$SNAPSHOT"
+}
+
+review_panes() {
+  # Every pane in WORKSPACE reporting itself as a review, oldest first.
+  # herdr hands out pane ids in creation order, so the first is the
+  # review that got there first.
+  local workspace=$1
+  snapshot | jq -r --arg ws "$workspace" --arg kind "$AGENT_KIND" '
+    .result.snapshot.agents[]
+    | select(.workspace_id == $ws and .agent == $kind)
+    | .pane_id' | sort -V
+}
+
+review_pane() {
+  # The pane hosting WORKSPACE's review, or nothing.
+  local workspace=$1
+  review_panes "$workspace" | head -1
+}
+
+tab_of_pane() {
+  local pane=$1
+  snapshot | jq -r --arg pane "$pane" '
+    first(.result.snapshot.panes[]
+          | select(.pane_id == $pane)
+          | .tab_id) // empty'
+}
+
+workspace_cwd() {
+  # Where the workspace is checked out: the working directory of the first
+  # pane of its active tab, which is what herdr names the workspace after.
+  local workspace=$1
+  snapshot | jq -r --arg ws "$workspace" '
+    (.result.snapshot.workspaces[] | select(.workspace_id == $ws) | .active_tab_id)
+    as $tab
+    | first(.result.snapshot.panes[] | select(.tab_id == $tab) | .cwd) // empty'
+}
+
+changed_summary() {
+  # What the operator is being asked to look at, for the panel row.  Counted
+  # from git rather than from tuicr, because no review session exists yet.
+  local directory=$1 count
+  count=$(git -C "$directory" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  case $count in
+    "" | 0) printf 'no uncommitted changes\n' ;;
+    1) printf '1 file to review\n' ;;
+    *) printf '%s files to review\n' "$count" ;;
+  esac
+}
+
+# Subcommands -----------------------------------------------------------------
+
+cmd_open() {
+  local workspace='' directory='' focus=--no-focus
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --workspace) workspace=${2:?--workspace needs an id}; shift 2 ;;
+      --cwd) directory=${2:?--cwd needs a directory}; shift 2 ;;
+      --focus) focus=--focus; shift ;;
+      --) shift; break ;;
+      -*) die "unknown option $1" ;;
+      *) break ;;
+    esac
+  done
+
+  require herdr
+  require jq
+  workspace=$(workspace_of "$workspace")
+  [ -n "$workspace" ] ||
+    die "no workspace: pass --workspace, or run inside a herdr pane"
+
+  local existing
+  existing=$(review_pane "$workspace")
+  if [ -n "$existing" ]; then
+    go_to_review "$existing"
+    return 0
+  fi
+
+  [ -n "$directory" ] || directory=$(workspace_cwd "$workspace")
+  [ -n "$directory" ] || directory=$PWD
+
+  local created pane tab
+  created=$(herdr tab create --workspace "$workspace" --cwd "$directory" \
+                             --label "$TAB_LABEL" "$focus")
+  pane=$(printf '%s\n' "$created" | jq -r '.result.root_pane.pane_id')
+  tab=$(printf '%s\n' "$created" | jq -r '.result.tab.tab_id')
+  valid_id "$pane" || die "herdr returned no usable pane: $pane"
+  valid_id "$tab" || die "herdr returned no usable tab: $tab"
+
+  # Claimed here rather than left to the pane, which cannot claim it until
+  # its shell has started, by which time a second caller would have opened
+  # a review of its own.  The pane reports the state again when tuicr is
+  # up.
+  report_blocked "$pane"
+
+  # Two callers can still pass the check above at the same instant, so the
+  # claim is verified rather than trusted.  Everyone who claimed now sees
+  # the same set and agrees on the oldest, so all but that one stand down.
+  # A lock would need to survive a caller dying mid-claim; this does not.
+  SNAPSHOT=
+  local winner
+  winner=$(review_pane "$workspace")
+  if [ -n "$winner" ] && [ "$winner" != "$pane" ]; then
+    release "$pane"
+    herdr tab close "$tab" >/dev/null 2>&1 || true
+    go_to_review "$winner"
+    return 0
+  fi
+
+  local command
+  printf -v command '%q host %q %q' "$(self)" "$tab" "$pane"
+  if [ $# -gt 0 ]; then
+    command+=' --'
+    command+=$(printf ' %q' "$@")
+  fi
+  herdr pane run "$pane" "$command" >/dev/null
+
+  jq -n --arg pane "$pane" --arg tab "$tab" --arg cwd "$directory" \
+    '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: false}'
+}
+
+cmd_close() {
+  local workspace=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --workspace) workspace=${2:?--workspace needs an id}; shift 2 ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+
+  require herdr
+  require jq
+  workspace=$(workspace_of "$workspace")
+  [ -n "$workspace" ] || die "no workspace: pass --workspace"
+
+  local pane
+  pane=$(review_pane "$workspace")
+  if [ -z "$pane" ]; then
+    jq -n '{closed: false}'
+    return 0
+  fi
+
+  local tab
+  tab=$(tab_of_pane "$pane")
+  release "$pane"
+  [ -n "$tab" ] && herdr tab close "$tab" >/dev/null 2>&1 || true
+  jq -n --arg pane "$pane" --arg tab "$tab" '{pane_id: $pane, tab_id: $tab, closed: true}'
+}
+
+cmd_status() {
+  local workspace=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --workspace) workspace=${2:?--workspace needs an id}; shift 2 ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+
+  require herdr
+  require jq
+  workspace=$(workspace_of "$workspace")
+  [ -n "$workspace" ] || die "no workspace: pass --workspace"
+
+  snapshot | jq --arg ws "$workspace" --arg kind "$AGENT_KIND" '
+    first(.result.snapshot.agents[]
+          | select(.workspace_id == $ws and .agent == $kind)) // {}'
+}
+
+go_to_review() {
+  # Focus an existing review and report it as the answer.  Through the
+  # agent rather than the pane: `pane focus' moves in a direction, while a
+  # review is a place to go to.
+  local pane=$1
+  herdr agent focus "$pane" >/dev/null
+  jq -n --arg pane "$pane" --arg tab "$(tab_of_pane "$pane")" \
+    '{pane_id: $pane, tab_id: $tab, reused: true}'
+}
+
+report_blocked() {
+  local pane=$1
+  herdr pane report-agent "$pane" --source "$SOURCE" --agent "$AGENT_KIND" \
+    --state blocked --message "waiting for review" >/dev/null
+}
+
+release() {
+  local pane=$1
+  herdr pane release-agent "$pane" --source "$SOURCE" --agent "$AGENT_KIND" \
+    >/dev/null 2>&1 || true
+}
+
+cmd_host() {
+  local tab=${1:?host needs a tab id} pane=${2:?host needs a pane id}
+  shift 2
+  [ "${1:-}" != -- ] || shift
+
+  require herdr
+  valid_id "$pane" || die "not a pane id: $pane"
+  valid_id "$tab" || die "not a tab id: $tab"
+
+  # Armed before anything that can fail, so that a review which never
+  # starts frees the workspace as surely as one the operator finishes.
+  # On any exit, including an interrupt: hand the pane back and take the
+  # tab away.  Expanded now rather than at exit, because these are locals
+  # and an EXIT trap does not run inside the function that set it.
+  trap "release '$pane'; herdr tab close '$tab' >/dev/null 2>&1 || true" EXIT
+
+  require tuicr
+  report_blocked "$pane"
+  herdr pane report-metadata "$pane" --source "$SOURCE" \
+    --display-agent "$TAB_LABEL" \
+    --token "summary=$(changed_summary "$PWD")" >/dev/null
+
+  if [ $# -gt 0 ]; then
+    tuicr "$@"
+  else
+    tuicr --working-tree
+  fi
+}
+
+main() {
+  local command=${1:-}
+  [ $# -gt 0 ] && shift || true
+  case $command in
+    open) cmd_open "$@" ;;
+    close) cmd_close "$@" ;;
+    status) cmd_status "$@" ;;
+    host) cmd_host "$@" ;;
+    -h | --help | help | '') usage ;;
+    *) die "unknown command $command" ;;
+  esac
+}
+
+main "$@"
