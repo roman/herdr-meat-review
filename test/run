@@ -130,6 +130,17 @@ test_open_hands_tuicr_its_own_arguments() {
   assert_contains "$(state_file log)" "revisions" "log"
 }
 
+test_open_accepts_a_pane_id_past_the_ninth() {
+  # herdr's public ids are base 36: the pane after w1:p9 is w1:pA.  A
+  # check that only allowed digits rejected herdr's own answer, and the
+  # tenth pane of a workspace could not be reviewed.
+  printf '10\n' >"$HERDR_STUB_STATE/next"
+  local reply
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal w1:pA "$(printf '%s' "$reply" | jq -r .pane_id)" "pane"
+  assert_equal w1:pA "$(state_file claims)" "claims"
+}
+
 test_open_refuses_without_a_workspace() {
   local output
   output=$(HERDR_WORKSPACE_ID= "$REVIEW" open 2>&1)

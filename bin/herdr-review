@@ -47,8 +47,10 @@ self() {
 
 valid_id() {
   # herdr's public ids, which are interpolated into the exit trap below
-  # and into a command the pane's shell runs.
-  [[ $1 =~ ^w[0-9A-Za-z]+:[pt][0-9]+$ ]]
+  # and into a command the pane's shell runs.  What follows the letter is
+  # base 36 rather than decimal — the pane after w1:p9 is w1:pA — so
+  # anything alphanumeric has to pass.
+  [[ $1 =~ ^w[0-9A-Za-z]+:[pt][0-9A-Za-z]+$ ]]
 }
 
 die() {

@@ -28,10 +28,17 @@ note() {
 }
 
 next_id() {
-  local n
+  # herdr cuts public ids from a base-36 counter, so the pane after
+  # w1:p9 is w1:pA rather than w1:p10.  Anything reading a pane id back
+  # has to cope with that, so the stub hands out the same shape.
+  local n digits=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ out=
   n=$(cat "$state/next" 2>/dev/null || printf 2)
   printf '%s\n' $((n + 1)) >"$state/next"
-  printf '%s\n' "$n"
+  while [ "$n" -gt 0 ]; do
+    out=${digits:$((n % 36)):1}$out
+    n=$((n / 36))
+  done
+  printf '%s\n' "${out:-0}"
 }
 
 forget() {
