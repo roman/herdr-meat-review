@@ -1,135 +1,71 @@
 # herdr-tuicr
 
-Code review as a first-class citizen of a herdr session.
+Run [tuicr](https://github.com/dnaeon/tuicr) code reviews inside a
+[herdr](https://herdr.dev) session, so a review waiting for you is as visible
+as an agent waiting for you.
 
-A review is a [tuicr](https://github.com/dnaeon/tuicr) TUI running in its own
-tab of the workspace whose code is under review, and herdr treats it as an
-agent: it goes `blocked` while it waits for the operator, and that state
-rolls up to the tab and the workspace like any other. herdr's own sidebar
-lists it beside Claude and Codex, because to herdr it is just another agent.
-herdr.el goes further and gives reviews a panel of their own.
+## herdr-review
 
-This is deliberately a separate initiative from herdr.el. herdr.el is a
-porcelain over herdr and should work on a machine that has never heard of
-tuicr; nothing in it mentions tuicr, and nothing here is loaded unless you ask
-for it.
-
-## How it works
-
-herdr has no concept of a code review, and it does not need one. The socket
-API accepts a state report for any agent label, not just the twenty-one
-coding agents it detects natively:
+`bin/herdr-review` is the whole tool. It opens a review, tells you whether one
+is still open, and closes one nobody finished.
 
 ```bash
-herdr pane report-agent w1:p4 --source custom:herdr-review --agent tuicr --state blocked
+herdr-review open                  # review the working tree of this workspace
+herdr-review open -- -r HEAD~3..HEAD   # anything after -- is tuicr's
+herdr-review status                # {} once the operator is done
+herdr-review close                 # for a review somebody walked away from
 ```
 
-That single call is the whole trick. herdr adds the pane to `agent.list`,
-rolls `blocked` up to the tab and the workspace, and emits
-`pane.agent_detected` and `pane.updated` on the event stream — the same
-stream herdr.el already follows. Every herdr client learns about the review
-without being taught what tuicr is.
+`open` creates a tab called `review` in the workspace, starts tuicr in it, and
+prints the pane and tab it used. Quitting the tuicr TUI closes that tab again.
 
-Around that, `bin/herdr-review` owns the lifecycle: it creates the tab, runs
-tuicr in it, attaches a display-only summary of what is waiting, and on exit
-releases the agent and closes the tab.
+Run it from any herdr pane and it acts on the workspace you are in; pass
+`--workspace w1` to act on another.
+
+### How it looks in herdr
+
+herdr has no idea what a code review is, so herdr-review piggy-backs on the
+agents it already understands: it reports the review pane as an agent, and
+herdr does the rest. A waiting review shows up in the Agents sidebar beside
+Claude and Codex, its tab and workspace turn blocked along with it, and
+`herdr agent wait` and the event stream see it like anything else.
 
 ## Requirements
 
 - herdr 0.7.5 or later, running.
 - `tuicr`, `jq`, `git` and `bash` on `PATH`.
-- For the panel: Emacs 29.1, magit-section, and a herdr.el with
-  `herdr-ui-add-panel` and `herdr-agents-hidden-kinds`. Both landed for this
-  package; against an older checkout, loading fails with `Symbol's value as
-  variable is void: herdr-agents-hidden-kinds`.
 
-The script needs none of the Emacs side. `herdr-review` works on its own in
-any herdr pane.
-
-## Install
-
-Put `bin/herdr-review` on your `PATH`, or set `herdr-tuicr-program` to its
-full path. Then:
-
-```elisp
-(add-to-list 'load-path "/path/to/herdr-tuicr")
-(require 'herdr-tuicr)
-```
-
-Loading it adds the Reviews panel to the herdr layout and takes review rows
-out of the Agents panel, so a review appears in exactly one place.
+Put `bin/herdr-review` on your `PATH`.
 
 ## Starting a review
 
-The same script backs all three, so a review started one way ends the same
-way as one started another.
+From a coding agent. `skills/herdr-review` teaches an agent when to ask for a
+review and how to read your comments back afterwards; install it and "have a
+look at this before I merge" is enough. See [docs/agents.md](docs/agents.md).
 
-From a coding agent, using the skill in `skills/herdr-review`:
-
-```bash
-herdr-review open
-```
-
-From any herdr pane, by hand:
+By hand, from any herdr pane:
 
 ```bash
-herdr-review open --workspace w1 -- --revisions HEAD~3..HEAD
+herdr-review open -- -r HEAD~3..HEAD
 ```
 
-From Emacs, on the row at point in any herdr panel:
+From Emacs, if you use herdr.el — it ships the panel and the commands. See
+[docs/emacs.md](docs/emacs.md).
 
-```
-M-x herdr-tuicr-open      (or + in the Reviews panel)
-```
+## Notes
 
-## One review per workspace
+**A workspace holds one review at a time.** Asking for a second focuses the
+first and reports `"reused": true`. Two open reviews of one checkout is more
+than most people can hold at once.
 
-Asking for a second review of a workspace focuses the first. Two open reviews
-of one checkout is more than an operator can hold at once, and the constraint
-is what lets the panel show one row per workspace instead of a list that
-needs reading.
+**The summary line counts uncommitted files.** It comes from `git status
+--porcelain` when the review opens, so a review of a commit range still
+describes the working tree. It is a nudge, not a fact about what you are
+reading.
 
-## Ending a review
+**One writer per pane, as everywhere in herdr.** Opening the review pane
+somewhere else takes input away from the terminal that had it.
 
-Quit the tuicr TUI. The script releases the agent authority and closes the
-review tab, which frees the workspace for the next one. `herdr-review close`
-(or `-` in the panel, or `M-x herdr-tuicr-close`) is for the review somebody
-walked away from.
+## Hacking
 
-## Tests
-
-`just test` runs these with the rest of herdr.el's suites.
-
-The panel is driven from a hand-written session snapshot. The lifecycle is
-driven for real, against the stub herdr in `test/bin`, which keeps a session
-in files instead of a server. That stub exists for the one state a live
-server cannot be asked for: its `on-claim` hook injects a competing claim at
-the instant the script makes its own, which is the race the one-review rule
-turns on.
-
-## What herdr.el had to grow
-
-Two extension points, both generic and neither aware of this package:
-
-- `herdr-agents-hidden-kinds` — kinds of agent the Agents panel leaves out,
-  for a kind that has a panel of its own.
-- `herdr-ui-panels` and `herdr-ui-add-panel` — the column of panels as a
-  list. The option holds the panels herdr ships and the weights you give
-  them; a package registers its own panel separately, so that a value saved
-  by Customize cannot silently drop a registration made before it was read.
-  This replaced `herdr-ui-spaces-height`, which is now obsolete.
-
-## Caveats
-
-- **The summary is a count of uncommitted files, taken once.** It reads `git
-  status --porcelain` in the workspace directory when the review opens, and
-  it ignores whatever tuicr arguments you passed — review a commit range and
-  the row still describes the working tree. It also does not track comments
-  the operator adds while reviewing; tuicr owns those, and reading them back
-  is `tuicr review comments`.
-- **The review pane is single-writer, like every herdr pane.** Opening it in
-  Emacs takes control from a terminal that had it.
-- **Killing the pane skips the cleanup.** The `EXIT` trap covers quitting
-  tuicr and interrupting it, but a pane closed out from under the script
-  takes the agent record with it anyway, so the workspace still ends up
-  free.
+See [docs/development.md](docs/development.md).

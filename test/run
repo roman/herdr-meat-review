@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+#
+# The review lifecycle, driven for real against the herdr in test/bin.
+#
+# That stub keeps a session in files, which is what makes the one state a
+# live server cannot be asked for testable: two callers claiming the same
+# workspace at the same instant.  Its on-claim hook injects a competing
+# claim at the moment the script makes its own.
+#
+# Every test gets a fresh session holding one workspace, w1, whose root
+# pane is w1:p1 and which has no review.  A failing test leaves its
+# session directory behind, named in the failure, so what the script did
+# to it can be read afterwards.
+#
+# Usage: test/run [NAME-SUBSTRING]
+
+set -uo pipefail
+
+readonly ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+readonly REVIEW="$ROOT/bin/herdr-review"
+
+PATH="$ROOT/test/bin:$PATH"
+export PATH
+
+passed=0
+failed=0
+current=
+current_failed=
+
+# Assertions -----------------------------------------------------------------
+
+fail() {
+  # Counted per test rather than per assertion, so that one broken thing
+  # reads as one failure however many assertions notice it.
+  [ -n "$current_failed" ] || printf '  FAILED  %s\n' "$current"
+  current_failed=1
+  printf '          %s\n' "$@"
+}
+
+assert_equal() {
+  local expected=$1 actual=$2 what=${3:-value}
+  [ "$expected" = "$actual" ] ||
+    fail "$what" "expected: $expected" "actual:   $actual"
+}
+
+assert_contains() {
+  local haystack=$1 needle=$2 what=${3:-output}
+  case $haystack in
+    *"$needle"*) ;;
+    *) fail "$what does not contain: $needle" "actual: $haystack" ;;
+  esac
+}
+
+# The session under test -----------------------------------------------------
+
+setup() {
+  HERDR_STUB_STATE=$(mktemp -d "${TMPDIR:-/tmp}/herdr-tuicr-XXXXXX")
+  export HERDR_STUB_STATE
+  printf 'w1:p1 w1:t1 w1 /repo\n' >"$HERDR_STUB_STATE/panes"
+  printf 'w1 w1:t1 project\n' >"$HERDR_STUB_STATE/workspaces"
+}
+
+teardown() {
+  if [ -n "$current_failed" ]; then
+    printf '          session left at %s\n' "$HERDR_STUB_STATE"
+  else
+    rm -rf "$HERDR_STUB_STATE"
+  fi
+}
+
+claim_hook() {
+  # Make the stub claim PANE for someone else the moment the script
+  # claims: another caller got in between the check and the claim.
+  local pane=$1
+  cat >"$HERDR_STUB_STATE/on-claim" <<EOF
+#!/usr/bin/env bash
+grep -qxF '$pane' "\$HERDR_STUB_STATE/claims" ||
+  printf '%s\n' '$pane' >>"\$HERDR_STUB_STATE/claims"
+EOF
+  chmod +x "$HERDR_STUB_STATE/on-claim"
+}
+
+state_file() {
+  cat "$HERDR_STUB_STATE/$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+}
+
+# Tests ----------------------------------------------------------------------
+
+test_open_puts_the_review_in_a_tab_of_its_own() {
+  # Claiming before the pane runs anything is what makes the workspace's
+  # one review slot taken from the moment the tab appears.
+  local reply
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal w1:p2 "$(printf '%s' "$reply" | jq -r .pane_id)" "pane"
+  assert_equal false "$(printf '%s' "$reply" | jq -r .reused)" "reused"
+  assert_equal w1:p2 "$(state_file claims)" "claims"
+  assert_equal "report-agent w1:p2" "$(head -1 "$HERDR_STUB_STATE/log")" \
+    "claimed before running anything"
+  assert_contains "$(sed -n 2p "$HERDR_STUB_STATE/log")" "pane run w1:p2" "run"
+}
+
+test_open_goes_to_the_review_already_open() {
+  # A workspace holds one review, so a second request is a jump.
+  "$REVIEW" open --workspace w1 >/dev/null
+  local reply
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal w1:p2 "$(printf '%s' "$reply" | jq -r .pane_id)" "pane"
+  assert_equal true "$(printf '%s' "$reply" | jq -r .reused)" "reused"
+  assert_equal w1:p2 "$(state_file claims)" "claims"
+  assert_contains "$(state_file log)" "agent focus w1:p2" "log"
+}
+
+test_open_stands_down_when_it_loses_the_race() {
+  # The check cannot be trusted, because another caller can pass it in
+  # the same instant, so the claim is verified after it is made and
+  # everyone but the oldest claim gives its tab back.
+  claim_hook w1:p1
+  local reply
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal w1:p1 "$(printf '%s' "$reply" | jq -r .pane_id)" "pane"
+  assert_equal true "$(printf '%s' "$reply" | jq -r .reused)" "reused"
+  assert_equal w1:p1 "$(state_file claims)" "claims"
+  assert_equal "w1:p1 w1:t1 w1 /repo" "$(state_file panes)" "panes"
+  assert_contains "$(state_file log)" "tab close w1:t2" "log"
+}
+
+test_open_hands_tuicr_its_own_arguments() {
+  # What follows -- is tuicr's, so a review is not always the worktree.
+  "$REVIEW" open --workspace w1 -- --revisions 'HEAD~3..HEAD' >/dev/null
+  assert_contains "$(state_file log)" "revisions" "log"
+}
+
+test_open_refuses_without_a_workspace() {
+  local output
+  output=$(HERDR_WORKSPACE_ID= "$REVIEW" open 2>&1)
+  assert_equal 1 "$?" "exit status"
+  assert_contains "$output" "no workspace" "complaint"
+}
+
+test_close_gives_the_pane_and_the_tab_back() {
+  # Ending a review frees the workspace to hold the next one.
+  "$REVIEW" open --workspace w1 >/dev/null
+  local reply
+  reply=$("$REVIEW" close --workspace w1)
+  assert_equal true "$(printf '%s' "$reply" | jq -r .closed)" "closed"
+  assert_equal "" "$(state_file claims)" "claims"
+  assert_contains "$(state_file log)" "release-agent w1:p2" "log"
+}
+
+test_close_says_so_when_there_is_nothing_to_close() {
+  # A caller cleaning up after an operator who walked away cannot know
+  # whether they quit the TUI first.
+  local reply
+  reply=$("$REVIEW" close --workspace w1)
+  assert_equal false "$(printf '%s' "$reply" | jq -r .closed)" "closed"
+}
+
+test_status_answers_empty_until_a_review_is_open() {
+  # An empty object is how a caller learns the operator is done.
+  assert_equal "{}" "$("$REVIEW" status --workspace w1 | jq -c .)" "before"
+  "$REVIEW" open --workspace w1 >/dev/null
+  assert_equal tuicr \
+    "$("$REVIEW" status --workspace w1 | jq -r .agent)" "after"
+}
+
+# Running them ---------------------------------------------------------------
+
+main() {
+  local filter=${1:-} name
+  for name in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
+    case $name in
+      *"$filter"*) ;;
+      *) continue ;;
+    esac
+    current=${name#test_}
+    current_failed=
+    setup
+    "$name"
+    teardown
+    if [ -n "$current_failed" ]; then
+      failed=$((failed + 1))
+    else
+      passed=$((passed + 1))
+    fi
+  done
+  printf '\n%d passed, %d failed\n' "$passed" "$failed"
+  [ "$failed" -eq 0 ]
+}
+
+main "$@"
