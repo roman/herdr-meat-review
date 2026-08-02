@@ -1,1 +1,4 @@
-*.elc
+/.pre-commit-config.yaml
+/result
+/result-*
+/.direnv/

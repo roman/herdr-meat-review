@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Parse every script, and lint it when shellcheck is installed.
+#
+# Every executable file under bin/ and test/ is a script here, so a new one
+# is linted without anybody remembering to add it to a list.
+#
+# A script rather than a recipe in the justfile, because a recipe with a
+# shebang is run through /usr/bin/env, which does not exist inside a nix
+# build — and the gate that runs there is the whole reason the flake exists.
+#
+# Usage: test/lint
+
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+cd "$root"
+
+while IFS= read -r file; do
+  printf 'Checking %s\n' "$file"
+  bash -n "$file"
+  if command -v shellcheck >/dev/null; then
+    shellcheck "$file"
+  else
+    printf '  shellcheck not installed; parsed only.'
+    printf ' Run "nix develop" for the whole gate.\n'
+  fi
+done < <(find bin test -type f -perm -u+x | sort)

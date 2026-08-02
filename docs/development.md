@@ -1,13 +1,29 @@
 # Development
 
 ```bash
-just check    # parse and lint both scripts, then run the suite
-just test     # the suite alone
+nix develop       # shellcheck, jq, git and just, and a pre-commit hook
+just check        # lint every script, then run the suite
+just test         # the suite alone
 just test race    # only tests whose name contains "race"
+nix flake check   # the same gate, hermetically, from a clean checkout
 ```
 
-`shellcheck` is used when it is installed and skipped with a note when it is
-not.
+The flake is how the gate answers the same on two machines. Outside it,
+`just lint` falls back to parsing each script with `bash -n` and says it
+skipped the linting — enough to work without nix, but it is not the gate.
+
+`test/lint` finds every executable file under `bin/` and `test/`, so a new
+script is linted without anybody adding it to a list. It is a script rather
+than a recipe because a justfile recipe with a shebang runs through
+`/usr/bin/env`, which does not exist inside the `nix flake check` sandbox.
+That sandbox is stricter than any shell you will develop in, and it has
+already caught two things that only fail there.
+
+The shell carries no herdr and no tuicr, but it cannot take away the ones
+you have installed — `mkShell` only prepends. What keeps the suite off a
+live server is `test/run` putting `test/bin` first on `PATH`, so the stubs
+shadow whatever else is there. That shadowing is also what lets the suite
+reach states a live server cannot be asked for.
 
 ## The stub herdr
 
@@ -36,6 +52,14 @@ deterministically on the losing side of it.
 
 A failing test leaves its session directory behind and names it, so you can
 read what the script did to it.
+
+## The stub tuicr
+
+`test/bin/tuicr` draws nothing and returns at once, so the pane-side half of
+a review — the `host` subcommand — can be driven without a terminal or a
+reviewer. It appends its own arguments to the same `log` the herdr stub
+writes, which is how a test asks whether the row and the TUI were given the
+same review to answer for.
 
 ## Adding a test
 

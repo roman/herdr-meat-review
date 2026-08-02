@@ -72,9 +72,12 @@ teardown() {
 claim_hook() {
   # Make the stub claim PANE for someone else the moment the script
   # claims: another caller got in between the check and the claim.
+  # Interpreted by the bash running this suite, not by whatever
+  # /usr/bin/env finds — inside a nix build there is no /usr/bin/env, and a
+  # hook that will not run makes the race silently untested.
   local pane=$1
   cat >"$HERDR_STUB_STATE/on-claim" <<EOF
-#!/usr/bin/env bash
+#!$BASH
 grep -qxF '$pane' "\$HERDR_STUB_STATE/claims" ||
   printf '%s\n' '$pane' >>"\$HERDR_STUB_STATE/claims"
 EOF
