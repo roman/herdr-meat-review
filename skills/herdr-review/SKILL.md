@@ -1,6 +1,6 @@
 ---
 name: herdr-review
-description: Get a human to review your change inside a herdr session and read their comments back. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
+description: Get a human to review your change inside a herdr session and read their comments back. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
 ---
 
 # herdr review
@@ -11,10 +11,27 @@ that blocked state up to the tab and the workspace as it does for any coding
 agent, so the review reaches whatever herdr client the user is looking at.
 
 This skill covers the whole loop: opening a review and reading the verdict
-back. Inside herdr it replaces the `tuicr` skill — ignore that skill's tmux
-and zellij wrappers, which would start a review herdr cannot see. Load it
-only for what this one does not cover: agent-authored findings and PR
-sessions.
+back.
+
+## When this is the wrong skill
+
+**A human is going to read the diff.** That is the whole of what this skill
+does. If the user wants *another agent* to read it instead — "get codex to
+review this", "have a second model look at it" — that is the `herdr` skill's
+job, and the command is `herdr agent start reviewer --kind <kind>` followed by
+`herdr agent prompt`. Ask which they meant when "review this" could be either;
+the difference is who spends the next ten minutes.
+
+**Two other boundaries**, so a rule from a neighbouring skill does not stop
+you:
+
+- The `tuicr` skill starts tuicr under tmux or zellij. Inside herdr, do not:
+  herdr would never see that review. Load that skill only for what this one
+  does not cover — agent-authored findings and PR sessions.
+- The `herdr` skill says not to create a tab unless the user asked for that
+  topology. Opening a review is the sanctioned exception, and `herdr-review`
+  makes and removes that tab itself. Do not create one yourself to put a
+  review in.
 
 ## Before anything
 
