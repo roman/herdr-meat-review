@@ -38,7 +38,13 @@ releases the agent and closes the tab.
 
 - herdr 0.7.5 or later, running.
 - `tuicr`, `jq`, `git` and `bash` on `PATH`.
-- For the panel: herdr.el, Emacs 29.1, magit-section.
+- For the panel: Emacs 29.1, magit-section, and a herdr.el with
+  `herdr-ui-add-panel` and `herdr-agents-hidden-kinds`. Both landed for this
+  package; against an older checkout, loading fails with `Symbol's value as
+  variable is void: herdr-agents-hidden-kinds`.
+
+The script needs none of the Emacs side. `herdr-review` works on its own in
+any herdr pane.
 
 ## Install
 
