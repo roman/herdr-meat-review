@@ -170,7 +170,7 @@ test_status_answers_empty_until_a_review_is_open() {
   # An empty object is how a caller learns the operator is done.
   assert_equal "{}" "$("$REVIEW" status --workspace w1 | jq -c .)" "before"
   "$REVIEW" open --workspace w1 >/dev/null
-  assert_equal tuicr \
+  assert_equal review \
     "$("$REVIEW" status --workspace w1 | jq -r .agent)" "after"
 }
 

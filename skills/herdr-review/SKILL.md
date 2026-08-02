@@ -7,7 +7,7 @@ description: Hand a change to the operator for review inside Herdr. Opens a tuic
 
 A review is a tuicr session running in its own Herdr tab, in the workspace
 whose code is under review. Herdr does not know what tuicr is: the review
-reports itself over the socket API as an agent of kind `tuicr`, so Herdr
+reports itself over the socket API as an agent of kind `review`, so Herdr
 rolls its state up to the tab and the workspace exactly as it does for a
 coding agent. The operator sees a blocked review in whatever Herdr client
 they use, and jumps to it from there.
@@ -52,7 +52,7 @@ the workspace you are running in, because Herdr injects
 ```
 
 What it does, in order: creates a tab labelled `review` in the workspace,
-reports that pane to Herdr as a blocked `tuicr` agent, and starts tuicr in
+reports that pane to Herdr as a blocked `review` agent, and starts tuicr in
 it with a one-line summary of what is waiting. The blocked state is
 published before the TUI exists, so the review is visible and the
 workspace's one review slot is taken from the moment the tab appears.
@@ -137,6 +137,6 @@ Never close a review the operator is still in.
 - Do not open one per file or per commit. One review covers the change.
 - Do not treat `herdr-review` as a way to get a terminal. Use `herdr pane
   split` or `herdr tab create` for that.
-- Do not report `tuicr` agent state yourself with `herdr pane
+- Do not report `review` agent state yourself with `herdr pane
   report-agent`. The script owns that pane's lifecycle, and a second
   reporter makes the panel lie.

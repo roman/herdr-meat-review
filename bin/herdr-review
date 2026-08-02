@@ -25,9 +25,12 @@
 
 set -euo pipefail
 
-# Not configurable: herdr-tuicr.el reads the same kind back out of the
-# session, and one of the two would always be free to disagree.
-readonly AGENT_KIND=tuicr
+# The work, not the tool doing it: a client reading this back wants to
+# know a review is waiting, not which TUI drew it, and swapping tuicr for
+# something else should not reach any of them.  Not configurable, because
+# herdr.el reads the same string and one of the two would always be free
+# to disagree.
+readonly AGENT_KIND=review
 readonly SOURCE="custom:herdr-review"
 readonly TAB_LABEL=review
 
@@ -290,8 +293,10 @@ cmd_host() {
 
   require tuicr
   report_blocked "$pane"
+  # No display name: the agent kind already reads as "review", and a
+  # display name repeating it would only be one more thing to keep in
+  # step with it.
   herdr pane report-metadata "$pane" --source "$SOURCE" \
-    --display-agent "$TAB_LABEL" \
     --token "summary=$(changed_summary "$PWD")" >/dev/null
 
   if [ $# -gt 0 ]; then

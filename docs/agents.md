@@ -75,7 +75,7 @@ herdr-review open --workspace w2 -- -r main..HEAD
 - Open one per file or per commit. One review covers the change.
 - Send input to the review pane. It belongs to the operator, and typing into a
   TUI they are reading is worse than useless.
-- Report `tuicr` agent state itself with `herdr pane report-agent`.
+- Report `review` agent state itself with `herdr pane report-agent`.
   `herdr-review` owns that pane's lifecycle, and a second reporter makes the
   sidebar lie.
 - Close a review the operator is still in.

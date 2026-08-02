@@ -71,7 +71,7 @@ snapshot() {
                        cwd: .[3]})),
         agents: ($panes | rows | map(select(.[0] as $p | $claimed | index($p)))
                  | map({pane_id: .[0], tab_id: .[1], workspace_id: .[2],
-                        cwd: .[3], agent: "tuicr", agent_status: "blocked"}))
+                        cwd: .[3], agent: "review", agent_status: "blocked"}))
       }}}'
 }
 
