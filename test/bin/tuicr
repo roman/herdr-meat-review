@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#
+# A tuicr that draws nothing and returns at once, so that the pane-side
+# half of a review can be driven without a terminal or a reviewer.  The
+# arguments it was given go to the same log the herdr stub writes, which
+# is where a test asks what the review was opened on.
+
+set -euo pipefail
+
+state=${HERDR_STUB_STATE:?HERDR_STUB_STATE is not set}
+printf 'tuicr %s\n' "$*" >>"$state/log"

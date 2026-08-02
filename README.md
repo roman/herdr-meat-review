@@ -71,10 +71,12 @@ if the commits under it stay put: amending or rebasing at or below the
 newest one replays everything already read. Tidy the branch after the last
 review, not between two.
 
-**The summary line counts uncommitted files.** It comes from `git status
---porcelain` when the review opens, so a review of a commit range still
-describes the working tree. It is a nudge, not a fact about what you are
-reading.
+**The summary line counts what the review shows.** It asks git about the
+same selectors tuicr was given, so a review of a range counts that range,
+and no file counts twice. Where git has no answer —
+a range that does not resolve, a directory outside a repository, or a
+selector like `--file` that involves no history — the line reads `review
+waiting` rather than naming a number nobody took.
 
 **One writer per pane, as everywhere in herdr.** Opening the review pane
 somewhere else takes input away from the terminal that had it.

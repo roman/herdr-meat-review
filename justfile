@@ -11,7 +11,7 @@ test *filter:
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
-    for file in bin/herdr-review test/bin/herdr test/run; do
+    for file in bin/herdr-review test/bin/herdr test/bin/tuicr test/run; do
         printf 'Checking %s\n' "$file"
         bash -n "$file"
         if command -v shellcheck >/dev/null; then

@@ -16,7 +16,8 @@
 
 set -uo pipefail
 
-readonly ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+readonly ROOT
 readonly REVIEW="$ROOT/bin/herdr-review"
 
 PATH="$ROOT/test/bin:$PATH"
@@ -234,6 +235,96 @@ test_open_outside_a_repository_still_works() {
   assert_contains "$(host_command)" '--working-tree' "working tree"
 }
 
+test_host_counts_the_range_it_is_showing() {
+  # The row tells the operator what they are being asked to look at, so a
+  # review of a range has to count that range.  Counting the working tree
+  # regardless reports a number belonging to work nobody asked about.
+  local dir
+  dir=$(repo)
+  commit_in "$dir" two
+  printf 'a\n' >"$dir/untracked-one"
+  printf 'b\n' >"$dir/untracked-two"
+  (cd "$dir" && "$REVIEW" host w1:t1 w1:p1 -- --revisions 'HEAD~1..HEAD')
+  assert_contains "$(state_file log)" "summary=1 file to review" "summary"
+}
+
+test_host_counts_the_working_tree_when_that_is_what_it_shows() {
+  # And hands tuicr the same selector the count was taken from, so that
+  # the row and the TUI are answering for one review.
+  local dir
+  dir=$(repo)
+  printf 'a\n' >"$dir/untracked-one"
+  printf 'b\n' >"$dir/untracked-two"
+  (cd "$dir" && "$REVIEW" host w1:t1 w1:p1)
+  assert_contains "$(state_file log)" "summary=2 files to review" "summary"
+  assert_contains "$(state_file log)" "tuicr --working-tree" "tuicr"
+}
+
+test_host_counts_a_file_once_however_many_selectors_reach_it() {
+  # A file committed in the range and edited again since is one file to
+  # read, not two.  The name has a space in it because `git status' quotes
+  # such a path and every other git command prints it plain: counting the
+  # working tree out of porcelain made the two selectors disagree about
+  # what the file is called, and the file counted twice.
+  local dir
+  dir=$(repo)
+  git -C "$dir" mv file 'my file'
+  git -C "$dir" commit -qm rename
+  printf 'two\n' >>"$dir/my file"
+  git -C "$dir" commit -qam two
+  printf 'more\n' >>"$dir/my file"
+  (cd "$dir" && "$REVIEW" host w1:t1 w1:p1 -- --revisions 'HEAD~1..HEAD' \
+                                              --working-tree)
+  assert_contains "$(state_file log)" "summary=1 file to review" "summary"
+}
+
+test_host_counts_every_tracked_file_from_the_root() {
+  # -A reviews the whole repository, so a review opened in a subdirectory
+  # counts the whole repository.  `git ls-files' answers about the current
+  # directory unless told otherwise, and would have counted the subtree.
+  local dir
+  dir=$(repo)
+  mkdir -p "$dir/sub"
+  printf 'nested\n' >"$dir/sub/nested"
+  git -C "$dir" add -A
+  git -C "$dir" commit -qm nested
+  (cd "$dir/sub" && "$REVIEW" host w1:t1 w1:p1 -- --all-files)
+  assert_contains "$(state_file log)" "summary=2 files to review" "summary"
+}
+
+test_host_gives_no_count_for_a_selector_git_cannot_measure() {
+  # tuicr's --file opens a path with no VCS involved.  Counting git for it
+  # answers zero, which reads as "nothing to review" when there is.
+  local dir
+  dir=$(repo)
+  (cd "$dir" && "$REVIEW" host w1:t1 w1:p1 -- --file notes.md)
+  assert_contains "$(state_file log)" "summary=review waiting" "summary"
+}
+
+test_host_gives_no_count_when_git_cannot_answer() {
+  # A range that does not resolve, and a directory git knows nothing
+  # about, both leave the count untaken.  Reporting zero would say the
+  # reviewer has nothing to read.
+  local dir
+  dir=$(repo)
+  (cd "$dir" && "$REVIEW" host w1:t1 w1:p1 -- --revisions 'typo..HEAD')
+  assert_contains "$(state_file log)" "summary=review waiting" "range"
+  (cd "$HERDR_STUB_STATE" && "$REVIEW" host w1:t1 w1:p1 -- --working-tree)
+  assert_contains "$(state_file log)" "summary=review waiting" "no repository"
+}
+
+test_host_survives_a_selector_missing_its_value() {
+  # `-r' with nothing after it is a mistake, not a crash: under `set -u'
+  # an unguarded $2 puts a bash error in the operator's pane.
+  local dir output
+  dir=$(repo)
+  output=$( (cd "$dir" && "$REVIEW" host w1:t1 w1:p1 -- --revisions) 2>&1 )
+  assert_contains "$(state_file log)" "summary=review waiting" "summary"
+  case $output in
+    *"unbound variable"*) fail "the selector walk crashed" "$output" ;;
+  esac
+}
+
 test_marks_lists_what_has_been_reviewed() {
   local dir
   dir=$(repo)
@@ -247,7 +338,7 @@ test_marks_lists_what_has_been_reviewed() {
 
 test_open_refuses_without_a_workspace() {
   local output
-  output=$(HERDR_WORKSPACE_ID= "$REVIEW" open 2>&1)
+  output=$(HERDR_WORKSPACE_ID='' "$REVIEW" open 2>&1)
   assert_equal 1 "$?" "exit status"
   assert_contains "$output" "no workspace" "complaint"
 }

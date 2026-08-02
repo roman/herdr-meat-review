@@ -115,7 +115,7 @@ case "${1:-} ${2:-}" in
     ok
     ;;
   "pane report-agent") note "report-agent $3"; claim "$3" ;;
-  "pane report-metadata") note "report-metadata $3"; ok ;;
+  "pane report-metadata") shift 2; note "report-metadata $*"; ok ;;
   "pane release-agent")
     note "release-agent $3"
     forget "$state/claims" "$3"

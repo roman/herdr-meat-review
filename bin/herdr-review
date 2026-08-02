@@ -187,13 +187,64 @@ unreviewed_args() {
   printf -- '--working-tree\n'
 }
 
+review_files() {
+  # The files each selector puts in front of the reviewer, one per line and
+  # repeated across selectors.  Every path is asked for the same way — from
+  # the root of the repository, and never through `git status', whose
+  # porcelain quotes a path with a space that the other commands print
+  # plain, so that one file would read as two.
+  #
+  # Fails when nothing measurable was named, and when git could not answer.
+  # Both are the same thing to a caller: nobody counted, which is not the
+  # same as counting nothing.
+  local directory=$1 measured=1
+  shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -r | --revisions)
+        [ $# -ge 2 ] || return 1
+        git -C "$directory" diff --name-only "$2" 2>/dev/null || return 1
+        measured=0
+        shift 2
+        ;;
+      -w | --working-tree)
+        git -C "$directory" diff --name-only HEAD 2>/dev/null || return 1
+        git -C "$directory" ls-files --others --exclude-standard \
+          --full-name -- :/ 2>/dev/null || return 1
+        measured=0
+        shift
+        ;;
+      -A | --all-files)
+        git -C "$directory" ls-files --full-name -- :/ 2>/dev/null || return 1
+        measured=0
+        shift
+        ;;
+      # tuicr takes selectors git cannot measure — `--file' opens a path
+      # with no repository involved — and they add no files to the count.
+      *) shift ;;
+    esac
+  done
+  return $measured
+}
+
 changed_summary() {
   # What the operator is being asked to look at, for the panel row.  Counted
-  # from git rather than from tuicr, because no review session exists yet.
-  local directory=$1 count
-  count=$(git -C "$directory" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  # from git rather than from tuicr, because no review session exists yet,
+  # and from the same selectors tuicr was given — a review of a range that
+  # counted the working tree would report a number about other work.  No
+  # file counts twice, however many selectors reach it.
+  #
+  # A count nobody could take is left unsaid rather than reported as zero,
+  # which would read as "nothing to review" when there is.
+  local directory=$1 files count
+  shift
+  files=$(review_files "$directory" "$@") || {
+    printf 'review waiting\n'
+    return 0
+  }
+  count=$(printf '%s' "$files" | sort -u | grep -c . || true)
   case $count in
-    "" | 0) printf 'no uncommitted changes\n' ;;
+    "" | 0) printf 'nothing to review\n' ;;
     1) printf '1 file to review\n' ;;
     *) printf '%s files to review\n' "$count" ;;
   esac
@@ -387,22 +438,26 @@ cmd_host() {
   # starts frees the workspace as surely as one the operator finishes.
   # On any exit, including an interrupt: hand the pane back and take the
   # tab away.  Expanded now rather than at exit, because these are locals
-  # and an EXIT trap does not run inside the function that set it.
+  # and an EXIT trap does not run inside the function that set it.  Both
+  # ids passed valid_id above, so there is nothing here for the quoting to
+  # let through.
+  # shellcheck disable=SC2064
   trap "release '$pane'; herdr tab close '$tab' >/dev/null 2>&1 || true" EXIT
 
   require tuicr
+
+  # Decided once, so that the row and the TUI answer for the same review.
+  local -a review_args=("$@")
+  [ ${#review_args[@]} -gt 0 ] || review_args=(--working-tree)
+
   report_blocked "$pane"
   # No display name: the agent kind already reads as "review", and a
   # display name repeating it would only be one more thing to keep in
   # step with it.
   herdr pane report-metadata "$pane" --source "$SOURCE" \
-    --token "summary=$(changed_summary "$PWD")" >/dev/null
+    --token "summary=$(changed_summary "$PWD" "${review_args[@]}")" >/dev/null
 
-  if [ $# -gt 0 ]; then
-    tuicr "$@"
-  else
-    tuicr --working-tree
-  fi
+  tuicr "${review_args[@]}"
 }
 
 main() {
