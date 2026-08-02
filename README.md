@@ -1,4 +1,4 @@
-# herdr-tuicr
+# herdr-review
 
 Run [tuicr](https://github.com/dnaeon/tuicr) code reviews inside a
 [herdr](https://herdr.dev) session, so a review waiting for you is as visible

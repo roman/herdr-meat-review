@@ -20,7 +20,7 @@ the Agents panel, so a review appears in one place rather than two.
 If the script is somewhere `exec-path` does not reach, name it:
 
 ```elisp
-(setq herdr-review-program "/path/to/herdr-tuicr/bin/herdr-review")
+(setq herdr-review-program "/path/to/herdr-review/bin/herdr-review")
 ```
 
 ## Using it

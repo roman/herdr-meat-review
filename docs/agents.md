@@ -37,45 +37,27 @@ so the record disappears rather than transitioning, and `herdr agent wait
 --until idle` sits there until it times out.
 
 Then the agent reads what you wrote, through tuicr rather than through this
-tool:
-
-```bash
-tuicr review list --repo "$PWD"
-tuicr review comments --session "<slug from the listing>"
-```
-
-A `comment_count` of zero means you looked and had nothing to say. That is
-approval, not a failure to find the comments.
+tool, and works through it.
 
 ## One review per workspace
 
 `open` on a workspace that already has a review focuses that review and
 reports `"reused": true` instead of opening a second one. This is deliberate,
 and an agent should not work around it by creating tabs itself: the limit is
-what keeps the operator's attention on one thing at a time, and what lets a
-client show a row per workspace instead of a list.
+what keeps your attention on one thing at a time, and what lets a client show
+a row per workspace instead of a list.
 
 Two callers racing for the same workspace also end up with one review. The
 loser gives its tab back and reports the winner's pane.
 
-## Reviewing something other than the working tree
+## The rules an agent follows
 
-Everything after `--` goes to tuicr unchanged:
+They live in `skills/herdr-review/SKILL.md`, not here. The skill is the
+artifact that travels — someone copies that directory into their agent's
+skills and takes nothing else — so it owns the operational detail: which
+directory a review opens in, how to tell "the review never started" from "the
+reviewer is done", how long to wait before handing the turn back, and what
+never to do to a review pane.
 
-```bash
-herdr-review open -- -r HEAD~3..HEAD
-herdr-review open -- --all-files
-herdr-review open --workspace w2 -- -r main..HEAD
-```
-
-## What an agent should not do
-
-- Open a review for a change nobody asked to have looked at. A blocked agent
-  is a demand for attention.
-- Open one per file or per commit. One review covers the change.
-- Send input to the review pane. It belongs to the operator, and typing into a
-  TUI they are reading is worse than useless.
-- Report `review` agent state itself with `herdr pane report-agent`.
-  `herdr-review` owns that pane's lifecycle, and a second reporter makes the
-  sidebar lie.
-- Close a review the operator is still in.
+Read it if you want to know what your agent has been told. Change it there if
+you disagree; a second copy in this file would only drift from it.

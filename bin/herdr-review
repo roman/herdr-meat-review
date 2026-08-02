@@ -3,7 +3,7 @@
 # herdr-review — run a tuicr review as a first-class herdr agent.
 #
 # A review lives in its own tab of the workspace being reviewed, labelled
-# "review", and reports itself to herdr as an agent of kind "tuicr" in the
+# "review", and reports itself to herdr as an agent of kind "review" in the
 # blocked state.  herdr rolls that state up to the tab and the workspace, so
 # a waiting review reaches every herdr client without any of them knowing
 # what tuicr is.
@@ -257,10 +257,22 @@ go_to_review() {
   # Focus an existing review and report it as the answer.  Through the
   # agent rather than the pane: `pane focus' moves in a direction, while a
   # review is a place to go to.
+  # The reply carries cwd like the opening one does, so that a caller
+  # holding on to it — to find the review session afterwards — does not
+  # have to care whether it opened the review or found it.
   local pane=$1
   herdr agent focus "$pane" >/dev/null
   jq -n --arg pane "$pane" --arg tab "$(tab_of_pane "$pane")" \
-    '{pane_id: $pane, tab_id: $tab, reused: true}'
+        --arg cwd "$(pane_cwd "$pane")" \
+    '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: true}'
+}
+
+pane_cwd() {
+  local pane=$1
+  snapshot | jq -r --arg pane "$pane" '
+    first(.result.snapshot.panes[]
+          | select(.pane_id == $pane)
+          | .cwd) // empty'
 }
 
 report_blocked() {

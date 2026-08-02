@@ -54,7 +54,7 @@ assert_contains() {
 # The session under test -----------------------------------------------------
 
 setup() {
-  HERDR_STUB_STATE=$(mktemp -d "${TMPDIR:-/tmp}/herdr-tuicr-XXXXXX")
+  HERDR_STUB_STATE=$(mktemp -d "${TMPDIR:-/tmp}/herdr-review-XXXXXX")
   export HERDR_STUB_STATE
   printf 'w1:p1 w1:t1 w1 /repo\n' >"$HERDR_STUB_STATE/panes"
   printf 'w1 w1:t1 project\n' >"$HERDR_STUB_STATE/workspaces"
@@ -108,6 +108,9 @@ test_open_goes_to_the_review_already_open() {
   assert_equal true "$(printf '%s' "$reply" | jq -r .reused)" "reused"
   assert_equal w1:p2 "$(state_file claims)" "claims"
   assert_contains "$(state_file log)" "agent focus w1:p2" "log"
+  # The caller needs this to find the review session afterwards, and
+  # cannot know whether it opened the review or was sent to one.
+  assert_equal /repo "$(printf '%s' "$reply" | jq -r .cwd)" "cwd"
 }
 
 test_open_stands_down_when_it_loses_the_race() {

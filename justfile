@@ -1,4 +1,4 @@
-# herdr-tuicr task runner
+# herdr-review task runner
 
 # Check the shell and run the suite
 check: lint test
