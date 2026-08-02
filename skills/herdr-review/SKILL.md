@@ -98,8 +98,28 @@ That leaves one rule, and it is the whole reason this works:
 
 Rewriting a commit the marker sits on or below moves it out from under the
 marker, and the next review replays everything the reviewer already read.
-If the user wants the branch tidied, do that after the last review, not
-between two.
+
+### Collapse the rounds when the review is over
+
+Those per-round commits are scaffolding. They exist so each marker has
+something to point at, not because the change is really five changes. When
+the user says the review is finished, squash them into what they describe —
+one commit, or one per concern where the work covered more than one.
+
+This is the only moment rewriting is safe, and it is the other half of the
+rule above: between two rounds a rewrite costs the reviewer a full re-read;
+after the last one it costs nothing. Do not leave the scaffolding standing
+because the rule above sounded absolute.
+
+Then move the newest marker onto what you built:
+
+```bash
+git update-ref refs/reviews/<n> HEAD
+```
+
+Skip this and the marker still names a commit the branch no longer
+contains, so the next review starts from nowhere and replays the whole
+change. `herdr-review marks` shows which `<n>` is newest.
 
 To review something other than that, pass tuicr's own arguments after `--`.
 They win, and the marker still moves:
