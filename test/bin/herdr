@@ -123,6 +123,23 @@ case "${1:-} ${2:-}" in
     ;;
   "pane run") note "pane run $3 ${4:-}"; ok ;;
   "agent focus") note "agent focus $3"; ok ;;
+  "agent prompt")
+    # A prompt that cannot be delivered: herdr restarted, or the agent's
+    # pane has gone.  What matters is that the caller is told.
+    if [ -e "$state/prompt-fails" ]; then
+      printf 'stub herdr: no such agent\n' >&2
+      exit 1
+    fi
+    note "agent prompt $3 $4"
+    ok
+    ;;
+  "agent get")
+    # The state a test put there, else idle: most tests care about what the
+    # agent was told, not about catching it mid-turn.
+    jq -n --arg pane "$3" \
+          --arg status "$(cat "$state/agent-status" 2>/dev/null || printf idle)" \
+      '{result: {agent: {pane_id: $pane, agent_status: $status}}}'
+    ;;
   *)
     printf 'stub herdr: unimplemented: %s\n' "$*" >&2
     exit 64

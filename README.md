@@ -30,6 +30,10 @@ itself.
 `open` creates a tab called `review` in the workspace, starts tuicr in it, and
 prints the pane and tab it used. Quitting the tuicr TUI closes that tab again.
 
+A review opened from an agent's pane **wakes that agent itself** — once when
+you write comments, and again when you quit. Nobody has to say "check the
+review". See [docs/agents.md](docs/agents.md).
+
 Run it from any herdr pane and it acts on the workspace you are in; pass
 `--workspace w1` to act on another.
 
@@ -85,6 +89,17 @@ waiting` rather than naming a number nobody took.
 
 **One writer per pane, as everywhere in herdr.** Opening the review pane
 somewhere else takes input away from the terminal that had it.
+
+**The agent is woken, never interrupted.** A burst of comments is one wake,
+because the watcher waits for you to stop typing, and an agent that is
+mid-turn is left alone until it is listening. Anything held back that way is
+counted in the wake that reports the review closed, which is taken from the
+session and so covers every comment however few were announced.
+
+**The closing wake always goes out.** It comes from the review pane's exit
+path, not from the watcher, so quitting the TUI, `close`, and the tab being
+taken away all reach the agent. `open` reports whether a review will wake its
+caller at all, in `notified`; `--no-notify` opens one that wakes nobody.
 
 ## Hacking
 

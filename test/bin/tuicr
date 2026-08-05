@@ -4,8 +4,83 @@
 # half of a review can be driven without a terminal or a reviewer.  The
 # arguments it was given go to the same log the herdr stub writes, which
 # is where a test asks what the review was opened on.
+#
+# It also answers the two read-only questions the watcher asks of a live
+# review, out of files a test writes as it goes:
+#
+#   session-active          "false" once the reviewer has quit; absent
+#                           until the TUI has registered a session at all
+#   session-comments        the comment array, as `review comments' prints it
+#   other-session-active    a second live session in the same checkout,
+#                           written to more recently than the first
+#   other-session-comments  its comments
+#   tui-blocks              keep the TUI up until the reviewer quits
+#   polls                   one mark per `review list', so that a test can
+#                           wait for the watcher to have looked
+#
+# Standing in for tuicr here rather than driving the real one keeps the
+# suite free of a terminal, and lets a test put comments in the reviewer's
+# mouth at the moment it wants them.
 
 set -euo pipefail
 
 state=${HERDR_STUB_STATE:?HERDR_STUB_STATE is not set}
-printf 'tuicr %s\n' "$*" >>"$state/log"
+
+comments_in() {
+  cat "$state/$1" 2>/dev/null || printf '[]\n'
+}
+
+session_entry() {
+  # One row of `review list'.  The stamps are ordered so that the other
+  # session always looks the more recently written of the two: a watcher
+  # that re-resolves by recency rather than by the path it bound to will
+  # follow it, which is the mistake these rows exist to catch.
+  local path=$1 comments=$2 active=$3 updated=$4
+  jq -n --arg path "$path" --arg updated "$updated" \
+        --argjson active "$active" \
+        --argjson count "$(comments_in "$comments" | jq 'length')" \
+    '{slug: ($path | split("/") | last), kind: "local", path: $path,
+      updated_at: $updated, comment_count: $count, active: $active}'
+}
+
+case "${1:-} ${2:-}" in
+  "review list")
+    printf '.' >>"$state/polls"
+
+    # No file means no session has registered: the TUI is not up yet, or
+    # this review never had one.
+    if [ ! -e "$state/session-active" ]; then
+      printf '[]\n'
+      exit 0
+    fi
+
+    {
+      session_entry "$state/session.json" session-comments \
+        "$(cat "$state/session-active")" "2026-01-01T00:00:00Z"
+      if [ -e "$state/other-session-active" ]; then
+        session_entry "$state/other-session.json" other-session-comments \
+          "$(cat "$state/other-session-active")" "2026-01-02T00:00:00Z"
+      fi
+    } | jq -s '.'
+    ;;
+  "review comments")
+    case "${4:-}" in
+      *other-session.json) comments_in other-session-comments ;;
+      *) comments_in session-comments ;;
+    esac
+    ;;
+  *)
+    printf 'tuicr %s\n' "$*" >>"$state/log"
+    # A TUI that stays up until the reviewer quits, for a test that needs a
+    # review to be open while it does something.  Without it every review
+    # is over before the pane has finished starting.
+    if [ -e "$state/tui-blocks" ]; then
+      while [ "$(cat "$state/session-active" 2>/dev/null)" != false ]; do
+        # The pane was taken away underneath it, which is not the reviewer
+        # quitting and does not look like it to anyone watching.
+        [ ! -e "$state/tui-killed" ] || exit 143
+        sleep 0.05
+      done
+    fi
+    ;;
+esac

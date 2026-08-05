@@ -1,6 +1,6 @@
 ---
 name: herdr-review
-description: Get a human to review your change inside a herdr session and read their comments back, each review showing only what arrived since the last one. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
+description: Get a human to review your change inside a herdr session and be woken when they comment, each review showing only what arrived since the last one. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
 ---
 
 # herdr review
@@ -71,20 +71,33 @@ the review session belongs to, and you need it again to read the comments.
 
 ```json
 {"pane_id":"w1:p4","tab_id":"w1:t4","cwd":"/home/you/project","reused":false,
- "summary":"6 files to review","empty":false}
+ "summary":"6 files to review","empty":false,"notified":true}
 ```
 
 **Check `empty` before you tell anyone a review is waiting.** tuicr quits at
 once when it is given nothing to show, which closes the tab and releases the
 pane, so `"empty": true` means the review has already gone. Say so and ask
-what to review, rather than polling for a reviewer who was never shown
+what to review, rather than waiting for a reviewer who was never shown
 anything.
+
+**Check `notified` before you hand the turn back.** `true` means this review
+will wake you and you should stop and wait. `false` means it will not, and
+nothing will arrive — you get that on a reused review, because the running
+one wakes whoever opened it, and when the review was not opened from your own
+pane. With `false`, tell the user you cannot be woken and ask them to say when
+they are done.
 
 What it does, in order: creates a tab labelled `review` in the workspace,
 reports that pane to herdr as a blocked `review` agent, and starts tuicr in
 it with a one-line summary of what is waiting. The blocked state is published
 before the TUI exists, so the review is visible and the workspace's one
 review slot is taken from the moment the tab appears.
+
+It also starts watching the review on your behalf, so that you hear about
+comments without anyone telling you. That works because you opened it from
+your own pane: herdr puts the pane id in your environment, and `open` records
+it as the one to wake. **So run `open` yourself.** A review opened any other
+way has no agent behind it and wakes nobody.
 
 ### Each review picks up where the last one left off
 
@@ -157,51 +170,72 @@ herdr-review open --workspace w2 --cwd /path/to/that/checkout
 ```
 
 **One review per workspace.** Opening a second review of a workspace that
-already has one focuses the first and returns `"reused": true`. Do not work
-around this by creating tabs yourself — the limit is deliberate, because two
-open reviews of one checkout is more than a person can hold at once. The
-reuse reply carries no `cwd`, so keep the one from the reply that opened it.
+already has one focuses the first and returns `"reused": true` — and
+`"notified": false`, because the review already running wakes whoever opened
+it, not you. Do not work around this by creating tabs yourself: the limit is
+deliberate, because two open reviews of one checkout is more than a person
+can hold at once.
 
 Do not pass `--focus` unless the user asked to be taken to the review.
 Taking over their screen is what the blocked state exists to avoid.
 
-## Wait
+## Hand the turn back — the review will wake you
 
-The review is `blocked` from the moment it opens until the user quits the
-tuicr TUI. Poll for that, rather than for the comments themselves:
+**Do not poll.** A review you opened watches itself and prompts you. Say the
+review is open, and stop. You will be given a new turn when there is
+something to do.
+
+You get woken when there is news, and always once at the end. The closing
+wake goes out however the review ended — the user quitting, `close`, or the
+tab being taken away — so it is safe to wait for.
+
+**Comments arrived.** The reviewer has written something and paused. The
+prompt says how many and gives you the session path.
+
+> **Read them. Do not edit anything yet.** The reviewer is still reading the
+> very files you would change, and a diff that moves under them costs them
+> the read. Understand each comment, work out what you will do, ask the user
+> if one is ambiguous — they are right there — then hand the turn back.
+
+**The review is closed.** Nothing more is coming, and the count in the prompt
+is of the whole session — including comments you were never woken about, and
+anything the reviewer wrote in the moment before the watcher started.
+**Now do the work.**
+
+**The review never opened.** tuicr registered no session, so nothing was put
+in front of anyone — usually because tuicr is not on the review pane's
+`PATH`. Do not wait. Tell the user and ask what to review.
+
+Read comments with the session path the prompt gives you:
 
 ```bash
-herdr-review status
+tuicr review comments --session <path from the prompt>
 ```
 
-A review that is still open reports `agent_status`, `pane_id`, and its
-summary at `.tokens.summary`. An empty object `{}` means no review is open.
+That path resolves on its own — no `--repo`, and no slug to look up.
 
-**`{}` on your first poll means the review never started** — it does not mean
-the user finished. tuicr missing from the pane's `PATH` ends a review that
-fast, and the tab closes itself on the way out, while `open` has already
-printed success. So poll once immediately after `open`: if that first answer
-is already `{}`, stop and tell the user the review pane did not come up. Only
-a `{}` that follows a poll showing a live review means they are done.
+### When you are woken about comments but were asked something else
 
-Do not wait for the review to turn `idle`. It reports `blocked` and then
-releases its agent authority outright, so the record disappears rather than
-transitioning, and `herdr agent wait --until idle` would sit there until it
-times out.
+The wake arrives as an ordinary turn, so it can land while you are in the
+middle of other work. Finish what the user asked for first, then deal with
+the review. The comments are on disk and are not going anywhere.
 
-A human review takes minutes, sometimes much longer. Do not sit in a tight
-loop burning turns: poll about once a minute, and after a few minutes with no
-change, tell the user the review is waiting and hand the turn back. Nothing
-is lost — the session persists, and you can pick the comments up whenever you
-are next asked.
+### If you need to check by hand
+
+`herdr-review status` still answers: a live review reports `agent_status`,
+`pane_id`, and its summary at `.tokens.summary`, and `{}` means no review is
+open. Use it when the user asks whether a review is still up, or when `open`
+reported `"notified": false` and nothing will reach you. Do not build a
+polling loop out of it when you will be woken.
 
 Never send input to the review pane. It belongs to the user, and typing into
 a TUI they are reading is worse than useless.
 
 ## Read the comments back
 
-Once the review is gone, find the session tuicr persisted and read it. Use
-the `cwd` that `open` reported, not `$PWD`:
+The wake prompts carry the session path, so prefer that. When you have lost
+it — a review opened in an earlier session, or one you did not open — find it
+from the `cwd` that `open` reported, not `$PWD`:
 
 ```bash
 review_repo=<the cwd from the open reply>
@@ -209,8 +243,8 @@ tuicr review list --repo "$review_repo"
 tuicr review comments --repo "$review_repo" --session "<slug from the listing>"
 ```
 
-`--repo` is not optional on either command. Without it tuicr resolves a local
-slug against `.` and reports the session as missing.
+`--repo` is not optional on either command when you go by slug. Without it
+tuicr resolves a local slug against `.` and reports the session as missing.
 
 The listing carries `comment_count`. A count of zero means they looked and
 had nothing to say — but only trust that when the listing found the session
@@ -245,3 +279,8 @@ Never close a review the user is still in.
   herdr client lie.
 - Do not report that a review passed when you never found its session. Say
   you could not read it.
+- Do not edit while a review is open. You are woken about comments so that
+  you can read and plan, not so that you can start changing files the
+  reviewer is looking at. Wait for the closing wake.
+- Do not poll `herdr-review status` in a loop waiting for a verdict. You will
+  be woken. A loop only spends turns to learn what arrives on its own.

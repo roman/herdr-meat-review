@@ -27,6 +27,7 @@ passed=0
 failed=0
 current=
 current_failed=
+WATCHER=
 
 # Assertions -----------------------------------------------------------------
 
@@ -62,6 +63,14 @@ setup() {
 }
 
 teardown() {
+  # A review left running would hold the next test's stub state open, and a
+  # blocking TUI would hold the suite itself.  Whatever the test did or
+  # failed to do, the review ends here.
+  if [ -n "$WATCHER" ]; then
+    take_the_review_away
+    wait "$WATCHER" 2>/dev/null || true
+    WATCHER=
+  fi
   if [ -n "$current_failed" ]; then
     printf '          session left at %s\n' "$HERDR_STUB_STATE"
   else
@@ -116,6 +125,132 @@ commit_in() {
 host_command() {
   # What the pane was told to run, which carries the tuicr arguments.
   grep '^pane run ' "$HERDR_STUB_STATE/log" | tail -1
+}
+
+# A reviewer, driven a comment at a time -------------------------------------
+#
+# The watcher reads a live review through the tuicr stub, which answers out
+# of these files.  A test writes them in the order a reviewer would produce
+# them, so what is under test is the watcher's reading of a session that
+# changes underneath it.
+
+review_registers() {
+  printf 'true\n' >"$HERDR_STUB_STATE/session-active"
+  printf '[]\n' >"$HERDR_STUB_STATE/session-comments"
+}
+
+reviewer_says() {
+  # Append comments, each with an id of its own, in one write.  One write
+  # because the watcher is running: three separate ones are three chances
+  # for it to look in between, and what is under test here is what it does
+  # with what it finds, not how fast a test can call jq.
+  local file=$HERDR_STUB_STATE/session-comments existing
+  existing=$(cat "$file" 2>/dev/null || printf '[]')
+  printf '%s' "$existing" |
+    jq --args '. as $had
+       | reduce $ARGS.positional[] as $text ($had;
+           . + [{id: "c\(length)", location: "review", content: $text,
+                 created_at: "2026-01-01T00:00:00Z"}])' "$@" >"$file.new"
+  mv "$file.new" "$file"
+}
+
+reviewer_says_elsewhere() {
+  # A comment in the other session of the same checkout, which is not this
+  # review and must not reach this review's agent.
+  local file=$HERDR_STUB_STATE/other-session-comments
+  jq -n --arg text "$1" \
+    '[{id: "x0", location: "review", content: $text,
+       created_at: "2026-01-02T00:00:00Z"}]' >"$file"
+}
+
+reviewer_quits() {
+  printf 'false\n' >"$HERDR_STUB_STATE/session-active"
+}
+
+# Intervals small enough that a test does not wait for a real reviewer.
+# `env' rather than a prefix on the command, because the callers below put
+# this in front of things that are not simple commands.
+BRISK=(env HERDR_REVIEW_POLL_SECONDS=0.05 HERDR_REVIEW_QUIET_POLLS=2)
+
+host_in_background() {
+  # The pane side of a review, with a TUI that stays up until the reviewer
+  # quits.  This is where the closing wake comes from, so a test about the
+  # end of a review has to go through it rather than through the watcher.
+  touch "$HERDR_STUB_STATE/tui-blocks"
+  "${BRISK[@]}" "$REVIEW" host w1:t1 w1:p2 --notify w1:p1 &
+  WATCHER=$!
+  settle
+}
+
+take_the_review_away() {
+  # What a closing tab does to a pane: the script is signalled and the TUI
+  # in it dies.  Both, and in that order, because bash runs an EXIT trap
+  # only once the foreground child has returned — signalling the script
+  # alone would leave it waiting on a TUI that nobody had told to stop.
+  kill -TERM "$WATCHER" 2>/dev/null || true
+  touch "$HERDR_STUB_STATE/tui-killed"
+}
+
+watch_in_background() {
+  "${BRISK[@]}" "$REVIEW" watch --notify w1:p1 --cwd /repo &
+  WATCHER=$!
+  # Let it find the session and take stock of what is in it.  A comment
+  # written before it has done that is one it will read as belonging to an
+  # earlier round, which is the behaviour a test has to set up for
+  # deliberately rather than trip over.
+  settle
+}
+
+polls_taken() {
+  local marks
+  marks=$(cat "$HERDR_STUB_STATE/polls" 2>/dev/null || printf '')
+  printf '%s\n' "${#marks}"
+}
+
+settle() {
+  # Wait for the watcher to have looked, several times over, rather than
+  # for a length of time.  A sleep long enough here on one machine is too
+  # short on a busier one, and the failure it produces reads as a bug in
+  # the watcher.
+  #
+  # Four by default, which covers the poll that sees a comment arrive and
+  # the QUIET_POLLS after it that decide the reviewer has stopped.
+  local want=$(( $(polls_taken) + ${1:-4} )) waited=0
+  while [ "$(polls_taken)" -lt "$want" ]; do
+    # A watcher that died will never poll again, and waiting for it to is
+    # the hang this bound exists to turn into a failure.
+    if ! kill -0 "$WATCHER" 2>/dev/null; then
+      fail "the watcher is gone after $(polls_taken) polls"
+      return 0
+    fi
+    sleep 0.05
+    waited=$((waited + 1))
+    [ "$waited" -lt 200 ] || { fail "the watcher stopped polling"; return 0; }
+  done
+}
+
+wait_for_watcher() {
+  # The watcher returns when the review goes away.  One that never notices
+  # would hang the suite, so it is given a bound and the failure is named:
+  # a watcher still running after the review ended is the bug, not the wait.
+  local waited=0
+  while kill -0 "$WATCHER" 2>/dev/null; do
+    sleep 0.05
+    waited=$((waited + 1))
+    if [ "$waited" -ge 200 ]; then
+      fail "the review ended and the watcher is still running"
+      return 0
+    fi
+  done
+  wait "$WATCHER" 2>/dev/null || true
+}
+
+prompts() {
+  grep '^agent prompt ' "$HERDR_STUB_STATE/log" 2>/dev/null || true
+}
+
+wakes_about_new_comments() {
+  prompts | grep -c 'new review comment' || true
 }
 
 # Tests ----------------------------------------------------------------------
@@ -449,6 +584,169 @@ test_host_survives_a_selector_missing_its_value() {
   case $output in
     *"unbound variable"*) fail "the selector walk crashed" "$output" ;;
   esac
+}
+
+test_open_tells_the_host_which_agent_asked() {
+  # The agent that asked for the review is the one to wake when comments
+  # arrive, and the only moment it can be identified is while its own
+  # request is being served.  herdr puts the pane in the environment of
+  # everything it starts.
+  HERDR_PANE_ID=w1:p1 "$REVIEW" open --workspace w1 >/dev/null
+  assert_contains "$(host_command)" '--notify w1:p1' "notify"
+}
+
+test_open_names_no_agent_when_a_person_asked() {
+  # A review opened from the Emacs panel has no agent behind it, and a
+  # watcher with nobody to tell is a poll that helps no one.
+  HERDR_PANE_ID='' "$REVIEW" open --workspace w1 >/dev/null
+  case "$(host_command)" in
+    *--notify*) fail "a review nobody asked for got a watcher" ;;
+  esac
+}
+
+test_watch_wakes_the_agent_once_for_a_burst_of_comments() {
+  # A reviewer writing four comments is one thing to be told about, not
+  # four.  Waking per comment would spend a turn of the agent's attention
+  # on each, and the reviewer is still typing.
+  review_registers
+  watch_in_background
+  reviewer_says one two three
+  settle
+  reviewer_quits
+  wait_for_watcher
+  assert_equal 1 "$(wakes_about_new_comments)" "wakes about comments"
+  assert_contains "$(prompts)" "3 new review comments" "count"
+}
+
+test_watch_ignores_comments_an_earlier_round_already_showed() {
+  # tuicr reuses a session when the same range is reviewed again, so the
+  # comments of the last round are already in it when this one opens.
+  # Announcing what is there at the start would replay the whole review.
+  review_registers
+  reviewer_says "said last time"
+  watch_in_background
+  settle
+  reviewer_quits
+  wait_for_watcher
+  assert_equal 0 "$(wakes_about_new_comments)" "announced an old comment"
+}
+
+test_host_wakes_the_agent_when_the_review_closes() {
+  # The signal that replaces "check the review": the reviewer quit, so
+  # there is nothing more coming and the agent can act.
+  review_registers
+  host_in_background
+  reviewer_says "please rename this"
+  settle
+  reviewer_quits
+  wait_for_watcher
+  assert_contains "$(prompts)" "review is closed" "closing wake"
+  assert_contains "$(prompts)" "1 comment in total" "count"
+}
+
+test_host_counts_the_whole_session_when_the_review_closes() {
+  # Whatever was held back — never announced because the agent was busy,
+  # or written in the moment before the watcher took stock — is in the
+  # session, and the closing count is taken from the session.  So nothing
+  # a reviewer wrote can go unmentioned.
+  printf 'working\n' >"$HERDR_STUB_STATE/agent-status"
+  review_registers
+  host_in_background
+  reviewer_says one two
+  settle
+  assert_equal 0 "$(wakes_about_new_comments)" "woke a working agent"
+  reviewer_quits
+  wait_for_watcher
+  assert_contains "$(prompts)" "2 comments in total" "count"
+}
+
+test_host_wakes_the_agent_when_the_review_is_taken_away() {
+  # `close' ends a review the operator walked away from, and a tab closing
+  # takes the pane with it.  The agent was told to wait for a wake, so the
+  # wake has to survive the review ending without the reviewer.
+  review_registers
+  host_in_background
+  reviewer_says "half a thought"
+  settle
+  take_the_review_away
+  wait_for_watcher
+  assert_contains "$(prompts)" "review is closed" "closing wake"
+}
+
+test_host_says_so_when_the_reviewer_had_nothing_to_say() {
+  # Silence is a verdict, and the agent cannot tell it from a review that
+  # never happened unless it is told.
+  review_registers
+  host_in_background
+  reviewer_quits
+  wait_for_watcher
+  assert_contains "$(prompts)" "review is closed" "closing wake"
+  assert_contains "$(prompts)" "no comments" "silence"
+}
+
+test_host_says_so_when_the_review_never_opened() {
+  # tuicr quits at once when it is given nothing, and a tuicr that is not
+  # on PATH never draws at all.  Either way no session registers, and an
+  # agent told to wait for a wake would wait for ever.
+  "${BRISK[@]}" HERDR_REVIEW_SESSION_POLLS=2 \
+    "$REVIEW" host w1:t1 w1:p2 --notify w1:p1
+  assert_contains "$(prompts)" "ended without opening" "closing wake"
+  assert_equal 0 "$(wakes_about_new_comments)" "invented comments"
+}
+
+test_watch_waits_for_an_agent_that_is_working() {
+  # Prompting an agent mid-turn interrupts the work the review was about.
+  # The comments keep until it is listening.
+  printf 'working\n' >"$HERDR_STUB_STATE/agent-status"
+  review_registers
+  watch_in_background
+  reviewer_says "a note"
+  settle
+  assert_equal 0 "$(wakes_about_new_comments)" "prompted a working agent"
+  printf 'idle\n' >"$HERDR_STUB_STATE/agent-status"
+  settle
+  assert_contains "$(prompts)" "1 new review comment" "told once idle"
+  reviewer_quits
+  wait_for_watcher
+}
+
+test_watch_holds_comments_it_could_not_deliver() {
+  # A wake that did not land must not be recorded as sent: those comments
+  # would then be missing from every later wake, and the agent would be
+  # told about work it had never seen.
+  printf 'refuse\n' >"$HERDR_STUB_STATE/prompt-fails"
+  review_registers
+  watch_in_background
+  reviewer_says "a note"
+  settle
+  rm -f "$HERDR_STUB_STATE/prompt-fails"
+  settle
+  reviewer_quits
+  wait_for_watcher
+  assert_contains "$(prompts)" "1 new review comment" "retried once it could"
+}
+
+test_watch_follows_the_session_it_was_started_for() {
+  # A checkout can hold more than one session, and another one going live
+  # is not this review.  Following whichever was written to last reported
+  # somebody else's comments to this review's agent.
+  review_registers
+  watch_in_background
+  printf 'true\n' >"$HERDR_STUB_STATE/other-session-active"
+  reviewer_says_elsewhere "not your review"
+  settle
+  assert_equal 0 "$(wakes_about_new_comments)" "announced another session"
+  reviewer_quits
+  wait_for_watcher
+}
+
+test_watch_gives_up_when_no_review_ever_registers() {
+  # tuicr quits at once when it is given nothing, so a session may never
+  # appear.  The watcher must not outlive the review it was watching.
+  "${BRISK[@]}" HERDR_REVIEW_SESSION_POLLS=3 \
+    "$REVIEW" watch --notify w1:p1 --cwd /repo
+  assert_equal 3 "$(polls_taken)" "looked for a session"
+  assert_equal "" "$(prompts)" "woke someone about a review that never was"
 }
 
 test_marks_lists_what_has_been_reviewed() {

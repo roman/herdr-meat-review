@@ -24,20 +24,49 @@ No arguments needed. herdr puts `HERDR_WORKSPACE_ID` into every pane it
 starts, so the review lands in the workspace the agent is working in and shows
 the working tree.
 
-You see a blocked review appear, read it, comment, and quit. The agent notices
-by polling:
+You see a blocked review appear, read it, and comment. The agent hands its
+turn back and waits — and the review tells it when something happens, so you
+never have to.
 
-```bash
-herdr-review status     # {} means the review is gone
-```
+## The review carries the message
 
-`{}` is the signal, not the comment count. Do not wait for the review to turn
-`idle` — it reports `blocked` and then releases its agent authority outright,
-so the record disappears rather than transitioning, and `herdr agent wait
---until idle` sits there until it times out.
+herdr also puts `HERDR_PANE_ID` into every pane, so `open` knows which agent
+asked. The review pane watches its own tuicr session and wakes that agent
+twice:
 
-Then the agent reads what you wrote, through tuicr rather than through this
-tool, and works through it.
+- **When comments arrive.** tuicr writes each comment to its session file the
+  moment you press Enter, so the agent can read your review while you are
+  still writing it. It reads and plans; it does not edit. You are looking at
+  the files it would change, and a diff that moves while you read costs you
+  the read.
+- **When the review ends.** That is the go-ahead, and it carries the count of
+  the whole session, including anything the agent was never woken for.
+  Silence is reported too: a review closed with no comments is an approval,
+  and the agent is told so rather than left to guess. So is a review that
+  never opened, which is what an agent waiting on a tuicr that is not on
+  `PATH` would otherwise wait for forever.
+
+The closing message comes from the pane's own exit path rather than from the
+watcher, so it goes out however the review ended — you quitting, `close`, or
+the tab being taken away.
+
+A burst of comments is one wake, not one per comment — the watcher waits for
+you to stop typing. And an agent that is mid-turn is never interrupted; the
+comments keep until it is listening.
+
+Nothing polls. If you would rather drive it by hand, `herdr-review status`
+still answers, and `{}` still means the review is gone.
+
+## A review nobody asked for wakes nobody
+
+Opening a review from the Emacs panel, or from a plain shell, has no agent
+behind it, so no watcher starts. Pass `--no-notify` to opt out from an agent's
+pane as well.
+
+`open` says which it did, in `notified`. An agent that reads `false` there
+knows nothing will reach it and must ask you instead of waiting. A review
+that was reused reports `false` too: the one already running belongs to
+whoever opened it.
 
 ## One review per workspace
 

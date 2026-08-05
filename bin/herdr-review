@@ -21,14 +21,21 @@
 # branch point instead.  Uncommitted work is always shown, because no
 # marker can record that it was seen.
 #
+# A review opened from an agent's pane watches itself, and wakes that agent
+# when the reviewer writes something and again when the review closes.  So
+# the operator never has to carry the message.
+#
 # Usage:
-#   herdr-review open   [--workspace ID] [--cwd DIR] [--focus] [-- TUICR-ARG...]
+#   herdr-review open   [--workspace ID] [--cwd DIR] [--focus] [--no-notify]
+#                       [--notify PANE] [-- TUICR-ARG...]
 #   herdr-review close  [--workspace ID]
 #   herdr-review status [--workspace ID]
 #   herdr-review marks  [DIR]
-#   herdr-review host   TAB PANE [-- TUICR-ARG...]   (internal; runs in the pane)
+#   herdr-review watch  --notify PANE [--cwd DIR]
+#   herdr-review host   TAB PANE [--notify PANE] [-- TUICR-ARG...]
+#                       (internal; runs in the pane)
 #
-# Every subcommand prints one JSON object on stdout.
+# Every subcommand prints one JSON object on stdout; `watch' prints nothing.
 
 set -euo pipefail
 
@@ -40,6 +47,23 @@ set -euo pipefail
 readonly AGENT_KIND=review
 readonly SOURCE="custom:herdr-review"
 readonly TAB_LABEL=review
+
+# How often the watcher asks tuicr what the reviewer has written, and how
+# many of those answers must be unchanged before it wakes the agent.
+#
+# Counted in polls rather than seconds so that one knob moves the pace of
+# everything: the suite drives a whole review in under a second by making
+# the poll short, and the quiet window follows it down.
+#
+# Seven quiet polls is about fifteen seconds, which is longer than the gap
+# between two comments of one thought and shorter than a reviewer's patience.
+readonly POLL_SECONDS=${HERDR_REVIEW_POLL_SECONDS:-2}
+readonly QUIET_POLLS=${HERDR_REVIEW_QUIET_POLLS:-7}
+
+# How long to wait for tuicr to register a session before deciding it never
+# will.  It quits at once when given nothing to show, and a watcher for a
+# review that never opened must not outlive the pane.
+readonly SESSION_POLLS=${HERDR_REVIEW_SESSION_POLLS:-15}
 
 self() {
   # Resolved so the pane runs this same file, whatever PATH it has.  By
@@ -322,20 +346,226 @@ changed_summary() {
   esac
 }
 
+# Watching a review as it is written ------------------------------------------
+#
+# tuicr writes every comment to its session file the moment the reviewer
+# presses Enter, and reports that session as active for as long as its TUI
+# is up.  So a review can be read while it is happening, and the agent that
+# asked for it can be told without the operator carrying the message.
+#
+# Two things are worth waking an agent for: comments arriving, and the
+# review closing.  The first is a prefetch — the agent reads and plans while
+# the reviewer is still reading, and edits nothing, because the reviewer is
+# looking at the very files it would change.  The second is the go-ahead.
+#
+# The watcher below sends the first.  It never sends the second, because a
+# review can end without it: `close' takes the tab away, and the watcher
+# goes with it.  So the closing wake belongs to the pane's exit path, which
+# runs however the review ended — see release_host.
+#
+# Everything here goes through tuicr's own commands rather than its store,
+# so where a session is kept stays tuicr's business.
+
+live_session() {
+  # The session file of the review running in DIRECTORY, or nothing if none
+  # is.  Asked once, to bind the watcher to one session: a checkout can hold
+  # more than one, and a watcher that asked again each time would follow
+  # whichever was written to last — reporting another workspace's review to
+  # this review's agent.
+  local directory=$1
+  tuicr review list --repo "$directory" 2>/dev/null |
+    jq -r 'map(select(.active == true))
+           | sort_by(.updated_at)
+           | if length == 0 then "" else last.path end' 2>/dev/null || true
+}
+
+session_is_live() {
+  # Whether the session this watcher bound to is still being reviewed.
+  local directory=$1 session=$2
+  tuicr review list --repo "$directory" 2>/dev/null |
+    jq -e --arg path "$session" \
+      'any(.[]; .path == $path and .active == true)' >/dev/null 2>&1
+}
+
+comment_ids() {
+  # Every comment in the session, oldest first.  Ids rather than contents,
+  # because what the watcher needs is which ones it has not seen.
+  local session=$1
+  tuicr review comments --session "$session" 2>/dev/null |
+    jq -r '.[].id' 2>/dev/null || true
+}
+
+ids_not_in() {
+  # The ids of CURRENT that KNOWN does not have.
+  local current=$1 known=$2
+  [ -n "$current" ] || return 0
+  [ -n "$known" ] || { printf '%s\n' "$current"; return 0; }
+  printf '%s\n' "$current" | grep -vxF "$known" || true
+}
+
+count_lines() {
+  [ -n "$1" ] || { printf '0\n'; return 0; }
+  printf '%s\n' "$1" | grep -c . || true
+}
+
+agent_status() {
+  local pane=$1
+  herdr agent get "$pane" 2>/dev/null |
+    jq -r '.result.agent.agent_status // "unknown"' 2>/dev/null || printf unknown
+}
+
+wake() {
+  # Tell the agent, and say whether it was told.  Failure is not fatal — the
+  # review is the operator's, and an agent that has gone away must not take
+  # the reviewer's pane with it — but a caller that records what it has
+  # announced has to know a message did not land.
+  local pane=$1 message=$2
+  herdr agent prompt "$pane" "$message" >/dev/null 2>&1
+}
+
+comment_word() {
+  [ "$1" = 1 ] && printf 'comment\n' || printf 'comments\n'
+}
+
+await_session() {
+  # The session tuicr registers when its TUI comes up, or nothing if it
+  # never does — an empty review quits at once, and a review of a directory
+  # tuicr keeps no session for never has one.
+  local directory=$1 polls=0 session=''
+  while [ "$polls" -lt "$SESSION_POLLS" ]; do
+    session=$(live_session "$directory")
+    [ -z "$session" ] || break
+    sleep "$POLL_SECONDS"
+    polls=$((polls + 1))
+  done
+  printf '%s\n' "$session"
+}
+
+cmd_watch() {
+  local notify='' directory='' record=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --notify) notify=${2:?--notify needs a pane id}; shift 2 ;;
+      --cwd) directory=${2:?--cwd needs a directory}; shift 2 ;;
+      --session-file) record=${2:?--session-file needs a path}; shift 2 ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+
+  require herdr
+  require jq
+  require tuicr
+  [ -n "$notify" ] || die "watch needs --notify"
+  valid_id "$notify" || die "not a pane id: $notify"
+  [ -n "$directory" ] || directory=$PWD
+
+  local session
+  session=$(await_session "$directory")
+  [ -n "$session" ] || return 0
+
+  # Told to whoever is waiting for the review to end, which needs the path
+  # and cannot ask for it once the session is no longer the live one.
+  [ -z "$record" ] || printf '%s\n' "$session" >"$record"
+
+  # Seed with what is already there.  tuicr reuses a session when the same
+  # range is reviewed again, so the comments of the last round are in it
+  # before this one starts, and announcing them would replay the review.
+  #
+  # This reads the session one poll after tuicr registered it, so a comment
+  # written in that gap is taken for an old one and never announced as new.
+  # The closing wake counts every comment in the session, so it still
+  # reaches the agent.  The gap is the time it takes a reviewer to read a
+  # diff they have not seen, so nothing is expected to arrive in it.
+  local announced outstanding='' previous='' quiet=0
+  announced=$(comment_ids "$session")
+
+  while session_is_live "$directory" "$session"; do
+    outstanding=$(ids_not_in "$(comment_ids "$session")" "$announced")
+    if [ "$outstanding" = "$previous" ]; then
+      quiet=$((quiet + 1))
+    else
+      quiet=0
+      previous=$outstanding
+    fi
+
+    # Wait for the reviewer to stop typing, so a burst of comments is one
+    # interruption.  And never while the agent is working: a prompt
+    # submitted mid-turn interrupts the work the review is about.  Held
+    # comments are not lost — they stay outstanding, and the closing wake
+    # counts the whole session however little of it was announced.
+    if [ -n "$outstanding" ] && [ "$quiet" -ge "$QUIET_POLLS" ] &&
+       [ "$(agent_status "$notify")" != working ]; then
+      local new
+      new=$(count_lines "$outstanding")
+      if wake "$notify" "$new new review $(comment_word "$new") on the change \
+you asked to have reviewed. Read them with: tuicr review comments --session \
+$session — the reviewer is still reading, so understand them and plan, but \
+do not edit yet. Hand the turn back when you have read them."; then
+        # Only once it landed.  Recording an undelivered message as
+        # announced would hide those comments from every later wake.
+        announced=$(printf '%s\n%s\n' "$announced" "$outstanding" | grep . || true)
+        outstanding=''
+        previous=''
+        quiet=0
+      fi
+    fi
+    sleep "$POLL_SECONDS"
+  done
+}
+
+wake_closed() {
+  # The wake that replaces the operator saying "check the review".  Sent
+  # from the pane's exit path, so that it goes out however the review ended
+  # — the reviewer quitting, `close', or the tab being taken away.
+  local pane=$1 session=$2
+  [ -n "$pane" ] || return 0
+
+  # No session was ever registered, so tuicr never drew anything: an empty
+  # review, or one that could not start.  The agent is waiting on a review
+  # that will not report, and saying nothing strands it.
+  if [ -z "$session" ]; then
+    wake "$pane" "The review ended without opening: tuicr registered no \
+session, so nothing was put in front of the reviewer. Do not wait for \
+comments. Tell the user, and ask what to review." || true
+    return 0
+  fi
+
+  local total
+  total=$(count_lines "$(comment_ids "$session")")
+  if [ "$total" = 0 ]; then
+    wake "$pane" "The review is closed with no comments. The reviewer read \
+the change and had nothing to say." || true
+    return 0
+  fi
+  wake "$pane" "The review is closed, with $total $(comment_word "$total") in \
+total. Read them with: tuicr review comments --session $session — then \
+address them in new commits." || true
+}
+
 # Subcommands -----------------------------------------------------------------
 
 cmd_open() {
+  # The agent that asked is the one to wake when the reviewer writes
+  # something.  herdr puts the pane id into the environment of everything
+  # it starts, so a request made from an agent's own pane identifies it
+  # without the agent having to know its own name.  A review opened from
+  # the Emacs panel or a plain shell has no agent behind it, and gets no
+  # watcher.
   local workspace='' directory='' focus=--no-focus
+  local notify=${HERDR_PANE_ID:-}
   while [ $# -gt 0 ]; do
     case $1 in
       --workspace) workspace=${2:?--workspace needs an id}; shift 2 ;;
       --cwd) directory=${2:?--cwd needs a directory}; shift 2 ;;
+      --notify) notify=${2:?--notify needs a pane id}; shift 2 ;;
+      --no-notify) notify=''; shift ;;
       --focus) focus=--focus; shift ;;
       --) shift; break ;;
       -*) die "unknown option $1" ;;
       *) break ;;
     esac
   done
+  [ -z "$notify" ] || valid_id "$notify" || die "not a pane id: $notify"
 
   require herdr
   require jq
@@ -392,6 +622,7 @@ cmd_open() {
 
   local command
   printf -v command '%q host %q %q' "$(self)" "$tab" "$pane"
+  [ -z "$notify" ] || command+=$(printf ' --notify %q' "$notify")
   if [ ${#review_args[@]} -gt 0 ]; then
     command+=' --'
     command+=$(printf ' %q' "${review_args[@]}")
@@ -408,8 +639,9 @@ cmd_open() {
         --arg summary "$summary" \
         --argjson empty "$([ "$summary" = 'nothing to review' ] &&
                            printf true || printf false)" \
+        --argjson notified "$([ -n "$notify" ] && printf true || printf false)" \
     '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: false,
-      summary: $summary, empty: $empty}'
+      summary: $summary, empty: $empty, notified: $notified}'
 }
 
 cmd_close() {
@@ -466,11 +698,16 @@ go_to_review() {
   # The reply carries cwd like the opening one does, so that a caller
   # holding on to it — to find the review session afterwards — does not
   # have to care whether it opened the review or found it.
+  #
+  # It is never notified.  The running review wakes whoever opened it, and
+  # that is not this caller: a second agent sent to an existing review has
+  # to find out how it went for itself, and is told so here rather than
+  # waiting for a message addressed to someone else.
   local pane=$1
   herdr agent focus "$pane" >/dev/null
   jq -n --arg pane "$pane" --arg tab "$(tab_of_pane "$pane")" \
         --arg cwd "$(pane_cwd "$pane")" \
-    '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: true}'
+    '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: true, notified: false}'
 }
 
 pane_cwd() {
@@ -510,21 +747,29 @@ release() {
 cmd_host() {
   local tab=${1:?host needs a tab id} pane=${2:?host needs a pane id}
   shift 2
-  [ "${1:-}" != -- ] || shift
+  local notify=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --notify) notify=${2:?--notify needs a pane id}; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
 
   require herdr
   valid_id "$pane" || die "not a pane id: $pane"
   valid_id "$tab" || die "not a tab id: $tab"
+  [ -z "$notify" ] || valid_id "$notify" || die "not a pane id: $notify"
 
   # Armed before anything that can fail, so that a review which never
   # starts frees the workspace as surely as one the operator finishes.
   # On any exit, including an interrupt: hand the pane back and take the
   # tab away.  Expanded now rather than at exit, because these are locals
-  # and an EXIT trap does not run inside the function that set it.  Both
-  # ids passed valid_id above, so there is nothing here for the quoting to
-  # let through.
-  # shellcheck disable=SC2064
-  trap "release '$pane'; herdr tab close '$tab' >/dev/null 2>&1 || true" EXIT
+  # and an EXIT trap does not run inside the function that set it.  What
+  # the trap needs is held in globals for the same reason.
+  HOST_PANE=$pane
+  HOST_TAB=$tab
+  trap release_host EXIT
 
   require tuicr
 
@@ -539,7 +784,45 @@ cmd_host() {
   herdr pane report-metadata "$pane" --source "$SOURCE" \
     --token "summary=$(changed_summary "$PWD" "${review_args[@]}")" >/dev/null
 
+  # Beside the TUI rather than after it, because the point is to reach the
+  # agent while the reviewer is still writing.  Its stderr goes nowhere:
+  # this pane belongs to tuicr, and a background job complaining into it
+  # would be painted over the diff the operator is reading.
+  if [ -n "$notify" ]; then
+    HOST_NOTIFY=$notify
+    HOST_SESSION_FILE=$(mktemp "${TMPDIR:-/tmp}/herdr-review-session-XXXXXX")
+    cmd_watch --notify "$notify" --cwd "$PWD" \
+              --session-file "$HOST_SESSION_FILE" 2>/dev/null &
+    HOST_WATCHER=$!
+  fi
+
   tuicr "${review_args[@]}"
+}
+
+HOST_PANE=
+HOST_TAB=
+HOST_NOTIFY=
+HOST_WATCHER=
+HOST_SESSION_FILE=
+
+release_host() {
+  # On any exit, including an interrupt: stop watching, tell the agent the
+  # review is over, hand the pane back, and take the tab away.
+  #
+  # The wake goes here rather than in the watcher because a review does not
+  # always end with the reviewer quitting.  `close' takes the tab away, and
+  # a watcher waiting to report that would be killed before it could.
+  [ -z "$HOST_WATCHER" ] || kill "$HOST_WATCHER" 2>/dev/null || true
+  wake_closed "$HOST_NOTIFY" "$(session_seen)"
+  release "$HOST_PANE"
+  herdr tab close "$HOST_TAB" >/dev/null 2>&1 || true
+  [ -z "$HOST_SESSION_FILE" ] || rm -f "$HOST_SESSION_FILE"
+}
+
+session_seen() {
+  # The session the watcher bound to, if it ever found one.
+  [ -n "$HOST_SESSION_FILE" ] || return 0
+  cat "$HOST_SESSION_FILE" 2>/dev/null || true
 }
 
 main() {
@@ -550,6 +833,7 @@ main() {
     close) cmd_close "$@" ;;
     status) cmd_status "$@" ;;
     marks) cmd_marks "$@" ;;
+    watch) cmd_watch "$@" ;;
     host) cmd_host "$@" ;;
     -h | --help | help | '') usage ;;
     *) die "unknown command $command" ;;
