@@ -15,5 +15,5 @@ pkgs.mkShell {
   ];
 
   # Installs a pre-commit hook that runs the same gate.
-  inherit (pkgs.herdr-review-git-hooks) shellHook;
+  inherit (pkgs.herdr-meat-review-git-hooks) shellHook;
 }

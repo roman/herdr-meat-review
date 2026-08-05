@@ -18,7 +18,7 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 readonly ROOT
-readonly REVIEW="$ROOT/bin/herdr-review"
+readonly REVIEW="$ROOT/bin/herdr-meat-review"
 
 PATH="$ROOT/test/bin:$PATH"
 export PATH
@@ -56,7 +56,7 @@ assert_contains() {
 # The session under test -----------------------------------------------------
 
 setup() {
-  HERDR_STUB_STATE=$(mktemp -d "${TMPDIR:-/tmp}/herdr-review-XXXXXX")
+  HERDR_STUB_STATE=$(mktemp -d "${TMPDIR:-/tmp}/herdr-meat-review-XXXXXX")
   export HERDR_STUB_STATE
   printf 'w1:p1 w1:t1 w1 /repo\n' >"$HERDR_STUB_STATE/panes"
   printf 'w1 w1:t1 project\n' >"$HERDR_STUB_STATE/workspaces"
@@ -170,7 +170,7 @@ reviewer_quits() {
 # Intervals small enough that a test does not wait for a real reviewer.
 # `env' rather than a prefix on the command, because the callers below put
 # this in front of things that are not simple commands.
-BRISK=(env HERDR_REVIEW_POLL_SECONDS=0.05 HERDR_REVIEW_QUIET_POLLS=2)
+BRISK=(env HERDR_MEAT_REVIEW_POLL_SECONDS=0.05 HERDR_MEAT_REVIEW_QUIET_POLLS=2)
 
 host_in_background() {
   # The pane side of a review, with a TUI that stays up until the reviewer
@@ -688,7 +688,7 @@ test_host_says_so_when_the_review_never_opened() {
   # tuicr quits at once when it is given nothing, and a tuicr that is not
   # on PATH never draws at all.  Either way no session registers, and an
   # agent told to wait for a wake would wait for ever.
-  "${BRISK[@]}" HERDR_REVIEW_SESSION_POLLS=2 \
+  "${BRISK[@]}" HERDR_MEAT_REVIEW_SESSION_POLLS=2 \
     "$REVIEW" host w1:t1 w1:p2 --notify w1:p1
   assert_contains "$(prompts)" "ended without opening" "closing wake"
   assert_equal 0 "$(wakes_about_new_comments)" "invented comments"
@@ -743,7 +743,7 @@ test_watch_follows_the_session_it_was_started_for() {
 test_watch_gives_up_when_no_review_ever_registers() {
   # tuicr quits at once when it is given nothing, so a session may never
   # appear.  The watcher must not outlive the review it was watching.
-  "${BRISK[@]}" HERDR_REVIEW_SESSION_POLLS=3 \
+  "${BRISK[@]}" HERDR_MEAT_REVIEW_SESSION_POLLS=3 \
     "$REVIEW" watch --notify w1:p1 --cwd /repo
   assert_equal 3 "$(polls_taken)" "looked for a session"
   assert_equal "" "$(prompts)" "woke someone about a review that never was"

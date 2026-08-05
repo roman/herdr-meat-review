@@ -1,4 +1,4 @@
-# herdr-review task runner
+# herdr-meat-review task runner
 
 # Check the shell and run the suite
 check: lint test

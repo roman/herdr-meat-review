@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# A herdr that keeps its session in files, so that herdr-review can be
+# A herdr that keeps its session in files, so that herdr-meat-review can be
 # driven into states a live server would take a long time to reach — and
 # into one it cannot be asked for at all, which is two callers claiming
 # the same workspace at the same instant.
@@ -14,7 +14,7 @@
 #   log         one line per command, for a test to assert against
 #   on-claim    optional hook, run after each report-agent
 #
-# Only the subcommands herdr-review uses are implemented.  Anything else
+# Only the subcommands herdr-meat-review uses are implemented.  Anything else
 # exits non-zero, so a new call site cannot pass unnoticed.
 
 set -euo pipefail

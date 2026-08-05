@@ -43,7 +43,7 @@ let
     ++ lib.optional (tuicrPackage != null) tuicrPackage;
 
   package = stdenv.mkDerivation {
-    pname = "herdr-review";
+    pname = "herdr-meat-review";
     version = "0.2.0";
 
     # The script and nothing else, so that a change to the documentation or
@@ -56,20 +56,20 @@ let
     nativeBuildInputs = [ makeWrapper ];
 
     postPatch = ''
-      patchShebangs bin/herdr-review
+      patchShebangs bin/herdr-meat-review
     '';
 
     doCheck = true;
     checkPhase = ''
       runHook preCheck
-      ${bash}/bin/bash -n bin/herdr-review
+      ${bash}/bin/bash -n bin/herdr-meat-review
       runHook postCheck
     '';
 
     installPhase = ''
       runHook preInstall
-      install -Dm755 bin/herdr-review $out/bin/herdr-review
-      wrapProgram $out/bin/herdr-review \
+      install -Dm755 bin/herdr-meat-review $out/bin/herdr-meat-review
+      wrapProgram $out/bin/herdr-meat-review \
         --prefix PATH : ${lib.makeBinPath runtimeTools}
       runHook postInstall
     '';
@@ -77,17 +77,17 @@ let
     passthru.tests = {
       # The script reports its own usage without touching a server, which is
       # enough to prove the wrapper resolves and the interpreter is patched.
-      runs = runCommand "herdr-review-runs-test" { } ''
-        ${package}/bin/herdr-review --help > help.txt
-        grep -Fq "herdr-review open" help.txt
+      runs = runCommand "herdr-meat-review-runs-test" { } ''
+        ${package}/bin/herdr-meat-review --help > help.txt
+        grep -Fq "herdr-meat-review open" help.txt
         touch $out
       '';
     };
 
     meta = {
-      homepage = "https://github.com/roman/herdr-review";
+      homepage = "https://github.com/roman/herdr-meat-review";
       description = "Run a tuicr code review as a first-class herdr agent";
-      mainProgram = "herdr-review";
+      mainProgram = "herdr-meat-review";
       license = lib.licenses.asl20;
       platforms = lib.platforms.darwin ++ lib.platforms.linux;
     };

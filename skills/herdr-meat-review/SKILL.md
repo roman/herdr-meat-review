@@ -1,5 +1,5 @@
 ---
-name: herdr-review
+name: herdr-meat-review
 description: Get a human to review your change inside a herdr session and be woken when they comment, each review showing only what arrived since the last one. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
 ---
 
@@ -29,7 +29,7 @@ you:
   herdr would never see that review. Load that skill only for what this one
   does not cover — agent-authored findings and PR sessions.
 - The `herdr` skill says not to create a tab unless the user asked for that
-  topology. Opening a review is the sanctioned exception, and `herdr-review`
+  topology. Opening a review is the sanctioned exception, and `herdr-meat-review`
   makes and removes that tab itself. Do not create one yourself to put a
   review in.
 
@@ -44,19 +44,19 @@ test "${HERDR_ENV:-}" = 1
 If that fails, say you are not running inside herdr and stop. Do not open a
 review in a session that is not yours.
 
-The entry point is the `herdr-review` script. Confirm it is reachable:
+The entry point is the `herdr-meat-review` script. Confirm it is reachable:
 
 ```bash
-command -v herdr-review
+command -v herdr-meat-review
 ```
 
-If it is not on `PATH`, it ships in the `bin` directory of the herdr-review
+If it is not on `PATH`, it ships in the `bin` directory of the herdr-meat-review
 checkout; call it by its full path.
 
 ## Open a review
 
 ```bash
-herdr-review open --cwd "$PWD"
+herdr-meat-review open --cwd "$PWD"
 ```
 
 **Always pass `--cwd "$PWD"`.** Without it the review opens in the
@@ -104,7 +104,7 @@ way has no agent behind it and wakes nobody.
 With no tuicr arguments, `open` shows what has arrived since the previous
 review — not the whole branch again. Every review leaves a marker at the
 commit it opened on, under `refs/reviews/<n>`, and the next one starts
-there. `herdr-review marks` lists them.
+there. `herdr-meat-review marks` lists them.
 
 The first review of a branch has no marker to start from, so it uses the
 branch point: everything the branch has that the default one does not.
@@ -117,7 +117,7 @@ clone` and by nothing else, so a repository that started local and is not on
 `"empty": true`, and the answer is to name a range yourself:
 
 ```bash
-herdr-review open --cwd "$PWD" -- --revisions <the commits you want>..HEAD
+herdr-meat-review open --cwd "$PWD" -- --revisions <the commits you want>..HEAD
 ```
 
 Uncommitted work is shown every time, because nothing can record that it was
@@ -153,20 +153,20 @@ git update-ref refs/reviews/<n> HEAD
 
 Skip this and the marker still names a commit the branch no longer
 contains, so the next review starts from nowhere and replays the whole
-change. `herdr-review marks` shows which `<n>` is newest.
+change. `herdr-meat-review marks` shows which `<n>` is newest.
 
 To review something other than that, pass tuicr's own arguments after `--`.
 They win, and the marker still moves:
 
 ```bash
-herdr-review open --cwd "$PWD" -- --revisions HEAD~3..HEAD
-herdr-review open --cwd "$PWD" -- --all-files
+herdr-meat-review open --cwd "$PWD" -- --revisions HEAD~3..HEAD
+herdr-meat-review open --cwd "$PWD" -- --all-files
 ```
 
 To review a different workspace than the one you are in, name it:
 
 ```bash
-herdr-review open --workspace w2 --cwd /path/to/that/checkout
+herdr-meat-review open --workspace w2 --cwd /path/to/that/checkout
 ```
 
 **One review per workspace.** Opening a second review of a workspace that
@@ -222,7 +222,7 @@ the review. The comments are on disk and are not going anywhere.
 
 ### If you need to check by hand
 
-`herdr-review status` still answers: a live review reports `agent_status`,
+`herdr-meat-review status` still answers: a live review reports `agent_status`,
 `pane_id`, and its summary at `.tokens.summary`, and `{}` means no review is
 open. Use it when the user asks whether a review is still up, or when `open`
 reported `"notified": false` and nothing will reach you. Do not build a
@@ -262,7 +262,7 @@ the tab, which frees the workspace to hold the next one. You end one only
 when the user abandoned it and asked you to clean up:
 
 ```bash
-herdr-review close
+herdr-meat-review close
 ```
 
 Never close a review the user is still in.
@@ -272,7 +272,7 @@ Never close a review the user is still in.
 - Do not open a review for a change the user has not asked to have looked at.
   A blocked agent is a demand for attention.
 - Do not open one per file or per commit. One review covers the change.
-- Do not treat `herdr-review` as a way to get a terminal. Use `herdr pane
+- Do not treat `herdr-meat-review` as a way to get a terminal. Use `herdr pane
   split` or `herdr tab create` for that.
 - Do not report `review` agent state yourself with `herdr pane report-agent`.
   The script owns that pane's lifecycle, and a second reporter makes every
@@ -282,5 +282,5 @@ Never close a review the user is still in.
 - Do not edit while a review is open. You are woken about comments so that
   you can read and plan, not so that you can start changing files the
   reviewer is looking at. Wait for the closing wake.
-- Do not poll `herdr-review status` in a loop waiting for a verdict. You will
+- Do not poll `herdr-meat-review status` in a loop waiting for a verdict. You will
   be woken. A loop only spends turns to learn what arrives on its own.

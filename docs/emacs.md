@@ -4,9 +4,13 @@
 panel beside its Spaces and Agents panels, and the commands that open and
 close a review. Nothing Emacs-related lives in this repository.
 
+The Emacs side keeps the `herdr-review` prefix on its own symbols. Elisp names
+a library after the file it lives in, and that file is herdr.el's to rename.
+Only the script this repository ships is called `herdr-meat-review`.
+
 ## Setup
 
-Put `bin/herdr-review` on your `PATH`, then load the file:
+Put `bin/herdr-meat-review` on your `PATH`, then load the file:
 
 ```elisp
 (require 'herdr-review)
@@ -20,7 +24,7 @@ the Agents panel, so a review appears in one place rather than two.
 If the script is somewhere `exec-path` does not reach, name it:
 
 ```elisp
-(setq herdr-review-program "/path/to/herdr-review/bin/herdr-review")
+(setq herdr-review-program "/path/to/herdr-meat-review/bin/herdr-meat-review")
 ```
 
 ## Using it

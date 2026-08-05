@@ -2,13 +2,13 @@
 inputs:
 
 final: prev: {
-  herdr-review-git-hooks = inputs.git-hooks.lib.${prev.stdenv.hostPlatform.system}.run {
+  herdr-meat-review-git-hooks = inputs.git-hooks.lib.${prev.stdenv.hostPlatform.system}.run {
     src = ../../.;
     hooks.check = {
       enable = true;
       # `final', so this does not depend on where the overlay that defines
       # the runner sits in the list.
-      entry = prev.lib.getExe final.herdr-review-check;
+      entry = prev.lib.getExe final.herdr-meat-review-check;
       pass_filenames = false;
       stages = [ "pre-commit" ];
     };

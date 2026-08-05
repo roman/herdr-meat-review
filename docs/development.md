@@ -28,9 +28,9 @@ reach states a live server cannot be asked for.
 ## The stub herdr
 
 `test/bin/herdr` is a herdr that keeps a session in files instead of talking
-to a server. The suite puts it first on `PATH`, so `herdr-review` drives it
+to a server. The suite puts it first on `PATH`, so `herdr-meat-review` drives it
 without knowing the difference. It implements only the subcommands
-`herdr-review` uses, and exits 64 on anything else, so a new call site cannot
+`herdr-meat-review` uses, and exits 64 on anything else, so a new call site cannot
 pass unnoticed.
 
 Its session lives under `$HERDR_STUB_STATE`:
@@ -47,7 +47,7 @@ Its session lives under `$HERDR_STUB_STATE`:
 `on-claim` is the reason the stub exists at all. A live server cannot be asked
 for two callers claiming one workspace in the same instant, and that race is
 what the one-review-per-workspace rule turns on. The hook injects a competing
-claim at the moment `herdr-review` makes its own, which puts the script
+claim at the moment `herdr-meat-review` makes its own, which puts the script
 deterministically on the losing side of it.
 
 A failing test leaves its session directory behind and names it, so you can
@@ -82,6 +82,6 @@ A test that has never failed has not been shown to test anything. The cheapest
 check is to break the thing on purpose and run the suite:
 
 ```bash
-# delete the claim-verify block from bin/herdr-review, then:
+# delete the claim-verify block from bin/herdr-meat-review, then:
 just test race     # should report the stand-down test failing
 ```

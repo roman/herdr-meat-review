@@ -1,5 +1,5 @@
 {
-  description = "herdr-review, a code review as a first-class herdr agent";
+  description = "herdr-meat-review, a code review as a first-class herdr agent";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/release-25.11";

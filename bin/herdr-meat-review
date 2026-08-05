@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# herdr-review — run a tuicr review as a first-class herdr agent.
+# herdr-meat-review — run a tuicr review as a first-class herdr agent.
 #
 # A review lives in its own tab of the workspace being reviewed, labelled
 # "review", and reports itself to herdr as an agent of kind "review" in the
@@ -26,14 +26,14 @@
 # the operator never has to carry the message.
 #
 # Usage:
-#   herdr-review open   [--workspace ID] [--cwd DIR] [--focus] [--no-notify]
-#                       [--notify PANE] [-- TUICR-ARG...]
-#   herdr-review close  [--workspace ID]
-#   herdr-review status [--workspace ID]
-#   herdr-review marks  [DIR]
-#   herdr-review watch  --notify PANE [--cwd DIR]
-#   herdr-review host   TAB PANE [--notify PANE] [-- TUICR-ARG...]
-#                       (internal; runs in the pane)
+#   herdr-meat-review open   [--workspace ID] [--cwd DIR] [--focus]
+#                            [--no-notify] [--notify PANE] [-- TUICR-ARG...]
+#   herdr-meat-review close  [--workspace ID]
+#   herdr-meat-review status [--workspace ID]
+#   herdr-meat-review marks  [DIR]
+#   herdr-meat-review watch  --notify PANE [--cwd DIR]
+#   herdr-meat-review host   TAB PANE [--notify PANE] [-- TUICR-ARG...]
+#                            (internal; runs in the pane)
 #
 # Every subcommand prints one JSON object on stdout; `watch' prints nothing.
 
@@ -45,7 +45,7 @@ set -euo pipefail
 # herdr.el reads the same string and one of the two would always be free
 # to disagree.
 readonly AGENT_KIND=review
-readonly SOURCE="custom:herdr-review"
+readonly SOURCE="custom:herdr-meat-review"
 readonly TAB_LABEL=review
 
 # How often the watcher asks tuicr what the reviewer has written, and how
@@ -57,13 +57,13 @@ readonly TAB_LABEL=review
 #
 # Seven quiet polls is about fifteen seconds, which is longer than the gap
 # between two comments of one thought and shorter than a reviewer's patience.
-readonly POLL_SECONDS=${HERDR_REVIEW_POLL_SECONDS:-2}
-readonly QUIET_POLLS=${HERDR_REVIEW_QUIET_POLLS:-7}
+readonly POLL_SECONDS=${HERDR_MEAT_REVIEW_POLL_SECONDS:-2}
+readonly QUIET_POLLS=${HERDR_MEAT_REVIEW_QUIET_POLLS:-7}
 
 # How long to wait for tuicr to register a session before deciding it never
 # will.  It quits at once when given nothing to show, and a watcher for a
 # review that never opened must not outlive the pane.
-readonly SESSION_POLLS=${HERDR_REVIEW_SESSION_POLLS:-15}
+readonly SESSION_POLLS=${HERDR_MEAT_REVIEW_SESSION_POLLS:-15}
 
 self() {
   # Resolved so the pane runs this same file, whatever PATH it has.  By
@@ -88,7 +88,7 @@ valid_id() {
 }
 
 die() {
-  printf 'herdr-review: %s\n' "$*" >&2
+  printf 'herdr-meat-review: %s\n' "$*" >&2
   exit 1
 }
 
@@ -790,7 +790,7 @@ cmd_host() {
   # would be painted over the diff the operator is reading.
   if [ -n "$notify" ]; then
     HOST_NOTIFY=$notify
-    HOST_SESSION_FILE=$(mktemp "${TMPDIR:-/tmp}/herdr-review-session-XXXXXX")
+    HOST_SESSION_FILE=$(mktemp "${TMPDIR:-/tmp}/herdr-meat-review-session-XXXXXX")
     cmd_watch --notify "$notify" --cwd "$PWD" \
               --session-file "$HOST_SESSION_FILE" 2>/dev/null &
     HOST_WATCHER=$!

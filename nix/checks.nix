@@ -7,7 +7,7 @@
 pkgs:
 
 {
-  gate = pkgs.runCommand "herdr-review-gate" {
+  gate = pkgs.runCommand "herdr-meat-review-gate" {
     nativeBuildInputs = [
       pkgs.just
       pkgs.git

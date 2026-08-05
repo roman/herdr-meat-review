@@ -22,7 +22,7 @@
 }:
 
 writeShellApplication {
-  name = "herdr-review-check";
+  name = "herdr-meat-review-check";
 
   runtimeInputs = [
     just

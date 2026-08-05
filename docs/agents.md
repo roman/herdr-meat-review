@@ -1,13 +1,13 @@
 # Reviews from a coding agent
 
 The point of this project is the loop where an agent writes a change, asks you
-to look at it, and reads your comments back. `skills/herdr-review` is what
+to look at it, and reads your comments back. `skills/herdr-meat-review` is what
 teaches an agent to do that; this document is the human-readable version of
 the same thing.
 
 ## Install the skill
 
-Copy or symlink `skills/herdr-review` into wherever your agent reads skills
+Copy or symlink `skills/herdr-meat-review` into wherever your agent reads skills
 from — for Claude Code that is `~/.claude/skills/`. The skill checks for
 `HERDR_ENV=1` and refuses to touch a session it is not running inside, so
 installing it does nothing until an agent is actually in a herdr pane.
@@ -17,7 +17,7 @@ installing it does nothing until an agent is actually in a herdr pane.
 The agent finishes a change and asks for a review:
 
 ```bash
-herdr-review open
+herdr-meat-review open
 ```
 
 No arguments needed. herdr puts `HERDR_WORKSPACE_ID` into every pane it
@@ -54,7 +54,7 @@ A burst of comments is one wake, not one per comment — the watcher waits for
 you to stop typing. And an agent that is mid-turn is never interrupted; the
 comments keep until it is listening.
 
-Nothing polls. If you would rather drive it by hand, `herdr-review status`
+Nothing polls. If you would rather drive it by hand, `herdr-meat-review status`
 still answers, and `{}` still means the review is gone.
 
 ## A review nobody asked for wakes nobody
@@ -81,7 +81,7 @@ loser gives its tab back and reports the winner's pane.
 
 ## The rules an agent follows
 
-They live in `skills/herdr-review/SKILL.md`, not here. The skill is the
+They live in `skills/herdr-meat-review/SKILL.md`, not here. The skill is the
 artifact that travels — someone copies that directory into their agent's
 skills and takes nothing else — so it owns the operational detail: which
 directory a review opens in, how to tell "the review never started" from "the
