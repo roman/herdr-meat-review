@@ -52,6 +52,23 @@ Claude and Codex, its tab and workspace turn blocked along with it, and
 
 Put `bin/herdr-review` on your `PATH`.
 
+### With Nix
+
+The flake exports the tool as `packages.herdr-review`, wrapped so it finds
+the tools it runs. herdr and tuicr are not pinned here, so pass them in and
+the script finds those whatever a pane has on `PATH`:
+
+```nix
+inputs.herdr-review.packages.${system}.herdr-review.override {
+  herdrPackage = herdr;
+  tuicrPackage = tuicr;
+}
+```
+
+Take the package rather than packaging `bin/herdr-review` yourself. Two
+consumers each pinning it separately is how one `herdr-review` ends up
+meaning two different scripts.
+
 ## Starting a review
 
 From a coding agent. `skills/herdr-review` teaches an agent when to ask for a
