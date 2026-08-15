@@ -43,8 +43,12 @@ twice:
   the whole session, including anything the agent was never woken for.
   Silence is reported too: a review closed with no comments is an approval,
   and the agent is told so rather than left to guess. So is a review that
-  never opened, which is what an agent waiting on a tuicr that is not on
-  `PATH` would otherwise wait for forever.
+  registered no session, which is what an agent waiting on a tuicr that is
+  not on `PATH` would otherwise wait for forever.
+
+Every one of those names the checkout it was about. A session path is an
+opaque file name, so without it an agent woken about another project's review
+cannot tell it from its own — and will answer it.
 
 The closing message comes from the pane's own exit path rather than from the
 watcher, so it goes out however the review ended — you quitting, `close`, or
@@ -67,6 +71,13 @@ pane as well.
 knows nothing will reach it and must ask you instead of waiting. A review
 that was reused reports `false` too: the one already running belongs to
 whoever opened it.
+
+So does a review of a checkout other than the one the asking pane is working
+in. The pane comes from the environment and the directory from `--cwd`, and
+nothing makes them agree, so an agent could be woken about work it is not
+doing. Checkouts are compared rather than paths, so working deep inside a
+monorepo still counts as working on it. Naming a pane with `--notify`
+overrides this: a pane you ask for is a pane you get.
 
 ## One review per workspace
 

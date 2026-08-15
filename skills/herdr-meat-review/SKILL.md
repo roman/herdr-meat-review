@@ -69,6 +69,12 @@ prefer it over checking.
 It prints one JSON object. Keep the `cwd` it reports: that is the repository
 the review session belongs to, and you need it again to read the comments.
 
+**It will not always be the directory you passed.** tuicr files a session
+under the top of the working tree, so in a monorepo the `cwd` reported for a
+review of `~/mono/packages/thing` is `~/mono` — and `~/mono` is the value that
+finds the session again. Pass `--cwd "$PWD"` regardless; the resolving is done
+for you.
+
 ```json
 {"pane_id":"w1:p4","tab_id":"w1:t4","cwd":"/home/you/project","reused":false,
  "summary":"6 files to review","empty":false,"notified":true}
@@ -82,10 +88,15 @@ anything.
 
 **Check `notified` before you hand the turn back.** `true` means this review
 will wake you and you should stop and wait. `false` means it will not, and
-nothing will arrive — you get that on a reused review, because the running
-one wakes whoever opened it, and when the review was not opened from your own
-pane. With `false`, tell the user you cannot be woken and ask them to say when
-they are done.
+nothing will arrive. You get that on a reused review, because the running one
+wakes whoever opened it; when the review was not opened from your own pane;
+and when the review is of a different checkout than the one your pane is
+working in — a wake for someone else's project reads exactly like a wake for
+yours, so it is not sent. With `false`, tell the user you cannot be woken and
+ask them to say when they are done.
+
+If you did mean to be woken about another checkout, name your pane outright
+with `--notify "$HERDR_PANE_ID"`. A pane you ask for is a pane you get.
 
 What it does, in order: creates a tab labelled `review` in the workspace,
 reports that pane to herdr as a blocked `review` agent, and starts tuicr in
@@ -166,8 +177,14 @@ herdr-meat-review open --cwd "$PWD" -- --all-files
 To review a different workspace than the one you are in, name it:
 
 ```bash
-herdr-meat-review open --workspace w2 --cwd /path/to/that/checkout
+herdr-meat-review open --workspace w2 --cwd /path/to/that/checkout \
+                       --notify "$HERDR_PANE_ID"
 ```
+
+That `--notify` is why this form needs it: the checkout is not the one your
+pane is working in, so you would not be woken by default. Leave it off and
+you get `"notified": false`, which is the honest answer — ask the user to say
+when they are done.
 
 **One review per workspace.** Opening a second review of a workspace that
 already has one focuses the first and returns `"reused": true` — and
@@ -202,9 +219,9 @@ is of the whole session — including comments you were never woken about, and
 anything the reviewer wrote in the moment before the watcher started.
 **Now do the work.**
 
-**The review never opened.** tuicr registered no session, so nothing was put
-in front of anyone — usually because tuicr is not on the review pane's
-`PATH`. Do not wait. Tell the user and ask what to review.
+**No session was registered.** The wake names the directory it searched.
+Nothing was put in front of anyone — usually because tuicr is not on the
+review pane's `PATH`. Do not wait. Tell the user and ask what to review.
 
 Read comments with the session path the prompt gives you:
 

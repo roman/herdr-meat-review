@@ -58,6 +58,11 @@ assert_contains() {
 setup() {
   HERDR_STUB_STATE=$(mktemp -d "${TMPDIR:-/tmp}/herdr-meat-review-XXXXXX")
   export HERDR_STUB_STATE
+  # Not inherited from whatever pane the suite was started in.  These two
+  # decide which workspace a review lands in and which agent it wakes, so a
+  # run inside a herdr pane would otherwise exercise different behaviour than
+  # one outside it -- and the pane it named would be a real agent.
+  unset HERDR_PANE_ID HERDR_WORKSPACE_ID
   printf 'w1:p1 w1:t1 w1 /repo\n' >"$HERDR_STUB_STATE/panes"
   printf 'w1 w1:t1 project\n' >"$HERDR_STUB_STATE/workspaces"
 }
@@ -103,7 +108,12 @@ repo() {
   # A git repository at the workspace's directory, so the marker the
   # review leaves behind has somewhere to live.  Two commits, so there is
   # history to slice.
-  local dir=$HERDR_STUB_STATE/repo
+  #
+  # NAME makes a second one, for a test contrasting two checkouts.  Only the
+  # first becomes the workspace's directory: the second exists to be somewhere
+  # the asking pane is not.
+  local name=${1:-repo} dir
+  dir=$HERDR_STUB_STATE/$name
   mkdir -p "$dir"
   git -C "$dir" init -q -b main
   git -C "$dir" config user.email test@example.com
@@ -111,7 +121,8 @@ repo() {
   printf 'one\n' >"$dir/file"
   git -C "$dir" add -A
   git -C "$dir" commit -qm one
-  printf 'w1:p1 w1:t1 w1 %s\n' "$dir" >"$HERDR_STUB_STATE/panes"
+  [ -n "${1:-}" ] ||
+    printf 'w1:p1 w1:t1 w1 %s\n' "$dir" >"$HERDR_STUB_STATE/panes"
   printf '%s\n' "$dir"
 }
 
@@ -176,8 +187,13 @@ host_in_background() {
   # The pane side of a review, with a TUI that stays up until the reviewer
   # quits.  This is where the closing wake comes from, so a test about the
   # end of a review has to go through it rather than through the watcher.
+  #
+  # Runs in DIRECTORY when one is given, because in a real review the pane's
+  # working directory is the one the tab was created on, and that is what the
+  # host watches and names in its wakes.
+  local dir=${1:-$PWD}
   touch "$HERDR_STUB_STATE/tui-blocks"
-  "${BRISK[@]}" "$REVIEW" host w1:t1 w1:p2 --notify w1:p1 &
+  ( cd "$dir" && exec "${BRISK[@]}" "$REVIEW" host w1:t1 w1:p2 --notify w1:p1 ) &
   WATCHER=$!
   settle
 }
@@ -690,7 +706,8 @@ test_host_says_so_when_the_review_never_opened() {
   # agent told to wait for a wake would wait for ever.
   "${BRISK[@]}" HERDR_MEAT_REVIEW_SESSION_POLLS=2 \
     "$REVIEW" host w1:t1 w1:p2 --notify w1:p1
-  assert_contains "$(prompts)" "ended without opening" "closing wake"
+  assert_contains "$(prompts)" "no session registered" "closing wake"
+  assert_contains "$(prompts)" "Do not wait" "what to do about it"
   assert_equal 0 "$(wakes_about_new_comments)" "invented comments"
 }
 
@@ -791,6 +808,170 @@ test_status_answers_empty_until_a_review_is_open() {
   "$REVIEW" open --workspace w1 >/dev/null
   assert_equal review \
     "$("$REVIEW" status --workspace w1 | jq -r .agent)" "after"
+}
+
+# Which checkout, and whose review ------------------------------------------
+#
+# Two things decide where a review lands: the directory it is opened on, and
+# the pane it wakes.  Both were taken on trust, and each failed in a way that
+# left the agent confidently wrong rather than stuck.
+
+subdirectory_of() {
+  # A directory inside the checkout, which is where an agent works in a
+  # monorepo and therefore what it passes as --cwd.
+  local dir=$1/packages/thing
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+session_filed_under() {
+  # Make the tuicr stub answer only to DIRECTORY, as the real one does: it
+  # files a session against the top of the working tree and matches --repo
+  # against that exact path.
+  printf '%s\n' "$1" >"$HERDR_STUB_STATE/session-repo"
+}
+
+test_open_reports_the_checkout_a_subdirectory_belongs_to() {
+  # What a caller is told to keep, and hand back to tuicr later.  tuicr files
+  # a session under the top of the working tree and answers only to that
+  # path, so the subdirectory the review was opened on is of no use to anyone
+  # trying to find it again.
+  local dir sub reply
+  dir=$(repo)
+  sub=$(subdirectory_of "$dir")
+  reply=$("$REVIEW" open --workspace w1 --cwd "$sub")
+  assert_equal "$dir" "$(printf '%s' "$reply" | jq -r .cwd)" "reported cwd"
+}
+
+test_open_opens_the_review_on_the_directory_it_was_given() {
+  # Only the reported path is resolved.  The pane's working directory is what
+  # tuicr resolves its own arguments against, so moving it up to the root
+  # would silently repoint every relative path a caller passed.
+  local dir sub
+  dir=$(repo)
+  sub=$(subdirectory_of "$dir")
+  "$REVIEW" open --workspace w1 --cwd "$sub" >/dev/null
+  assert_contains "$(state_file panes)" "w1:p2 w1:t2 w1 $sub" "the pane's directory"
+}
+
+test_watch_finds_a_session_filed_against_the_checkout_root() {
+  # The review pane sits in the subdirectory the review was opened on, and
+  # tuicr answers only to the root it filed the session under.  A watcher that
+  # searches the pane's own directory finds nothing, announces no comment, and
+  # reports at the close that the review never opened -- while a person is
+  # reading it.
+  local dir sub
+  dir=$(repo)
+  sub=$(subdirectory_of "$dir")
+  session_filed_under "$dir"
+  review_registers
+  host_in_background "$sub"
+  reviewer_says "please rename this"
+  settle
+  assert_equal 1 "$(wakes_about_new_comments)" "wake about the comment"
+  reviewer_quits
+  wait_for_watcher
+  assert_contains "$(prompts)" "1 comment in total" "closing count"
+}
+
+test_open_leaves_a_directory_git_knows_nothing_about_alone() {
+  # Resolving to the top of a working tree cannot become a requirement to be
+  # in one: a review of a plain directory still opens.
+  local plain reply
+  plain=$HERDR_STUB_STATE/plain
+  mkdir -p "$plain"
+  reply=$("$REVIEW" open --workspace w1 --cwd "$plain")
+  assert_equal "$plain" "$(printf '%s' "$reply" | jq -r .cwd)" "reported cwd"
+}
+
+test_open_does_not_wake_an_agent_about_another_checkout() {
+  # The pane to wake comes from the environment and the thing to review from
+  # --cwd, so nothing about a request makes them agree.  A wake carries a
+  # session file rather than a repository, so a review of someone else's
+  # project reaches an agent reading exactly like its own.
+  local other reply
+  repo >/dev/null                     # the checkout the asking pane works in
+  other=$(repo other)
+  reply=$(HERDR_PANE_ID=w1:p1 "$REVIEW" open --workspace w1 --cwd "$other")
+  assert_equal false "$(printf '%s' "$reply" | jq -r .notified)" "notified"
+  case "$(host_command)" in
+    *--notify*) fail "an agent was bound to a review of another checkout" ;;
+  esac
+}
+
+test_open_still_wakes_the_pane_that_was_named_outright() {
+  # The guard above second-guesses an environment variable nobody set on
+  # purpose.  A caller that names a pane has said what it means.
+  local other
+  repo >/dev/null
+  other=$(repo other)
+  HERDR_PANE_ID=w1:p1 "$REVIEW" open --workspace w1 --cwd "$other" \
+    --notify w1:p1 >/dev/null
+  assert_contains "$(host_command)" '--notify w1:p1' "notify"
+}
+
+test_open_wakes_an_agent_whose_pane_is_in_a_linked_worktree() {
+  # A worktree has a top of its own, so comparing working trees would drop
+  # the wake for every agent that had moved into one -- which is the ordinary
+  # way of working on a branch.  What is compared is the shared git
+  # directory, which a worktree keeps.
+  local dir tree
+  dir=$(repo)
+  tree=$HERDR_STUB_STATE/linked
+  git -C "$dir" worktree add -q --detach "$tree" HEAD
+  printf 'w1:p1 w1:t1 w1 %s\n' "$tree" >"$HERDR_STUB_STATE/panes"
+  HERDR_PANE_ID=w1:p1 "$REVIEW" open --workspace w1 --cwd "$dir" >/dev/null
+  assert_contains "$(host_command)" '--notify w1:p1' "notify"
+}
+
+test_open_wakes_an_agent_reviewing_a_directory_outside_any_checkout() {
+  # Either side being outside a repository proves nothing about the other,
+  # and a wake dropped on a guess costs the reviewer their reply.
+  local plain
+  repo >/dev/null
+  plain=$HERDR_STUB_STATE/plain
+  mkdir -p "$plain"
+  HERDR_PANE_ID=w1:p1 "$REVIEW" open --workspace w1 --cwd "$plain" >/dev/null
+  assert_contains "$(host_command)" '--notify w1:p1' "notify"
+}
+
+test_open_wakes_an_agent_working_in_a_subdirectory_of_the_review() {
+  # The guard compares checkouts, not paths.  An agent working deep in a
+  # monorepo is working on the review it just asked for.
+  local dir sub
+  dir=$(repo)
+  sub=$(subdirectory_of "$dir")
+  printf 'w1:p1 w1:t1 w1 %s\n' "$sub" >"$HERDR_STUB_STATE/panes"
+  HERDR_PANE_ID=w1:p1 "$REVIEW" open --workspace w1 --cwd "$dir" >/dev/null
+  assert_contains "$(host_command)" '--notify w1:p1' "notify"
+}
+
+# What the agent is told -----------------------------------------------------
+
+test_host_names_the_checkout_when_the_review_closes() {
+  # A wake that names only a session file cannot be told from one meant for
+  # another project, because the file name says nothing about either.
+  local dir
+  dir=$(repo)
+  review_registers
+  host_in_background "$dir"
+  reviewer_says "looks good"
+  settle
+  reviewer_quits
+  wait_for_watcher
+  assert_contains "$(prompts)" "$dir" "the checkout the review was of"
+}
+
+test_host_names_the_checkout_it_searched_when_no_session_registered() {
+  # The message names the directory it searched and no cause.  A session filed
+  # under another path is indistinguishable from one that was never drawn, so
+  # any cause it named would be a guess -- and this is the message that decides
+  # whether an agent stops waiting for a reviewer.
+  local dir
+  dir=$(repo)
+  ( cd "$dir" && exec "${BRISK[@]}" HERDR_MEAT_REVIEW_SESSION_POLLS=2 \
+      "$REVIEW" host w1:t1 w1:p2 --notify w1:p1 )
+  assert_contains "$(prompts)" "$dir" "the checkout it searched"
 }
 
 # Running them ---------------------------------------------------------------

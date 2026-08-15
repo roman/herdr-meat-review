@@ -47,6 +47,17 @@ case "${1:-} ${2:-}" in
   "review list")
     printf '.' >>"$state/polls"
 
+    # The real tuicr records a session against the top of the working tree,
+    # and matches --repo against that exact path without resolving the
+    # argument up to it.  So a caller asking about a subdirectory of the
+    # checkout is told there is no session at all.  A test opts into that by
+    # writing session-repo; the ones that do not care are unaffected.
+    if [ -e "$state/session-repo" ] &&
+       [ "${4:-}" != "$(cat "$state/session-repo")" ]; then
+      printf '[]\n'
+      exit 0
+    fi
+
     # No file means no session has registered: the TUI is not up yet, or
     # this review never had one.
     if [ ! -e "$state/session-active" ]; then

@@ -173,6 +173,26 @@ git_repo() {
   git -C "$1" rev-parse --git-dir >/dev/null 2>&1
 }
 
+git_root() {
+  # The top of the working tree holding DIRECTORY, or nothing when it is not
+  # in one.  Nothing is an ordinary answer: a review of a plain directory is
+  # allowed, and must not be turned into a requirement to be in a checkout.
+  #
+  # This is the path tuicr files a session under, so it is what has to be
+  # asked for when looking one up again.
+  git -C "$1" rev-parse --show-toplevel 2>/dev/null || true
+}
+
+git_identity() {
+  # What project DIRECTORY belongs to, for deciding whether two directories
+  # are the same work.  The shared git directory rather than the working
+  # tree, because a linked worktree has a top of its own and is still the
+  # same project -- an agent that has moved into one is working on exactly
+  # what it asked to have reviewed.
+  git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null ||
+    true
+}
+
 last_mark() {
   # The highest-numbered marker, which is the last review shown, or
   # nothing before the first review.  Nothing is an ordinary answer, and
@@ -459,6 +479,14 @@ cmd_watch() {
   valid_id "$notify" || die "not a pane id: $notify"
   [ -n "$directory" ] || directory=$PWD
 
+  # Searched for by the path tuicr files a session under -- see git_root.  The
+  # review pane's own directory is the one the review was opened on, which in
+  # a monorepo is a subdirectory, and asking about that finds nothing however
+  # long a reviewer spends in the session.
+  local root
+  root=$(git_root "$directory")
+  [ -z "$root" ] || directory=$root
+
   local session
   session=$(await_session "$directory")
   [ -n "$session" ] || return 0
@@ -498,9 +526,10 @@ cmd_watch() {
       local new
       new=$(count_lines "$outstanding")
       if wake "$notify" "$new new review $(comment_word "$new") on the change \
-you asked to have reviewed. Read them with: tuicr review comments --session \
-$session — the reviewer is still reading, so understand them and plan, but \
-do not edit yet. Hand the turn back when you have read them."; then
+you asked to have reviewed in $directory. Read them with: tuicr review \
+comments --session $session — the reviewer is still reading, so understand \
+them and plan, but do not edit yet. Hand the turn back when you have read \
+them."; then
         # Only once it landed.  Recording an undelivered message as
         # announced would hide those comments from every later wake.
         announced=$(printf '%s\n%s\n' "$announced" "$outstanding" | grep . || true)
@@ -517,27 +546,35 @@ wake_closed() {
   # The wake that replaces the operator saying "check the review".  Sent
   # from the pane's exit path, so that it goes out however the review ended
   # — the reviewer quitting, `close', or the tab being taken away.
-  local pane=$1 session=$2
+  local pane=$1 session=$2 directory=$3
   [ -n "$pane" ] || return 0
 
-  # No session was ever registered, so tuicr never drew anything: an empty
-  # review, or one that could not start.  The agent is waiting on a review
-  # that will not report, and saying nothing strands it.
+  # Named in every wake, because a session path is an opaque file name: an
+  # agent woken about another project's review cannot tell it from its own
+  # until it opens the session and reads what is inside.
+  local what="The review of $directory"
+
+  # An unregistered session has two possible causes -- nothing was ever drawn,
+  # or a session exists under a path other than the one searched -- and
+  # nothing here can tell them apart.  Every way of asking tuicr returns the
+  # same empty answer.  So the message names the directory it searched and
+  # claims nothing about why: this is what decides whether an agent stops
+  # waiting, and a guess it cannot check is worse than no reason at all.
   if [ -z "$session" ]; then
-    wake "$pane" "The review ended without opening: tuicr registered no \
-session, so nothing was put in front of the reviewer. Do not wait for \
-comments. Tell the user, and ask what to review." || true
+    wake "$pane" "$what ended with no session registered for that directory, \
+so there are no comments to read and none are coming. Do not wait. Tell the \
+user, and ask what to review." || true
     return 0
   fi
 
   local total
   total=$(count_lines "$(comment_ids "$session")")
   if [ "$total" = 0 ]; then
-    wake "$pane" "The review is closed with no comments. The reviewer read \
-the change and had nothing to say." || true
+    wake "$pane" "$what is closed with no comments. The reviewer read the \
+change and had nothing to say." || true
     return 0
   fi
-  wake "$pane" "The review is closed, with $total $(comment_word "$total") in \
+  wake "$pane" "$what is closed, with $total $(comment_word "$total") in \
 total. Read them with: tuicr review comments --session $session — then \
 address them in new commits." || true
 }
@@ -552,12 +589,15 @@ cmd_open() {
   # the Emacs panel or a plain shell has no agent behind it, and gets no
   # watcher.
   local workspace='' directory='' focus=--no-focus
-  local notify=${HERDR_PANE_ID:-}
+  # `named' separates a pane the caller asked for from one the environment
+  # supplied.  Only the second is second-guessed below: a caller that names a
+  # pane has said what it means and is owed it.
+  local notify=${HERDR_PANE_ID:-} named=''
   while [ $# -gt 0 ]; do
     case $1 in
       --workspace) workspace=${2:?--workspace needs an id}; shift 2 ;;
       --cwd) directory=${2:?--cwd needs a directory}; shift 2 ;;
-      --notify) notify=${2:?--notify needs a pane id}; shift 2 ;;
+      --notify) notify=${2:?--notify needs a pane id}; named=1; shift 2 ;;
       --no-notify) notify=''; shift ;;
       --focus) focus=--focus; shift ;;
       --) shift; break ;;
@@ -582,6 +622,33 @@ cmd_open() {
 
   [ -n "$directory" ] || directory=$(workspace_cwd "$workspace")
   [ -n "$directory" ] || directory=$PWD
+
+  # Where tuicr will file the session, which is not necessarily the directory
+  # being opened -- see git_root.  The tab is still created on the directory
+  # as given, because tuicr's own arguments are resolved against the pane's
+  # working directory and moving it would silently repoint every relative
+  # path a caller passed.
+  local review_root
+  review_root=$(git_root "$directory")
+  [ -n "$review_root" ] || review_root=$directory
+
+  # The pane comes from the environment and the directory from --cwd, so
+  # nothing about a request makes the two agree.  Without this an agent is
+  # woken about a project it is not working on, and a wake carries a session
+  # file rather than a repository, so it reads exactly like its own review.
+  #
+  # Only a positive disagreement counts.  Either side being outside a
+  # repository proves nothing about the other, and dropping the wake on a
+  # guess costs the reviewer their reply.
+  if [ -n "$notify" ] && [ -z "$named" ]; then
+    local asking reviewing
+    asking=$(git_identity "$(pane_cwd "$notify")")
+    reviewing=$(git_identity "$directory")
+    if [ -n "$asking" ] && [ -n "$reviewing" ] && [ "$asking" != "$reviewing" ]
+    then
+      notify=''
+    fi
+  fi
 
   local created pane tab
   created=$(herdr tab create --workspace "$workspace" --cwd "$directory" \
@@ -635,7 +702,10 @@ cmd_open() {
   # that had already gone.
   local summary
   summary=$(changed_summary "$directory" "${review_args[@]}")
-  jq -n --arg pane "$pane" --arg tab "$tab" --arg cwd "$directory" \
+  # The root rather than the directory opened: this is the value a caller
+  # needs to find the session again, and tuicr will only answer to the path it
+  # filed one under.
+  jq -n --arg pane "$pane" --arg tab "$tab" --arg cwd "$review_root" \
         --arg summary "$summary" \
         --argjson empty "$([ "$summary" = 'nothing to review' ] &&
                            printf true || printf false)" \
@@ -813,7 +883,12 @@ release_host() {
   # always end with the reviewer quitting.  `close' takes the tab away, and
   # a watcher waiting to report that would be killed before it could.
   [ -z "$HOST_WATCHER" ] || kill "$HOST_WATCHER" 2>/dev/null || true
-  wake_closed "$HOST_NOTIFY" "$(session_seen)"
+  # The root rather than the pane's own directory, so that the agent is told
+  # the checkout the session was filed under and can ask tuicr about it.
+  local watched=$PWD root
+  root=$(git_root "$PWD")
+  [ -z "$root" ] || watched=$root
+  wake_closed "$HOST_NOTIFY" "$(session_seen)" "$watched"
   release "$HOST_PANE"
   herdr tab close "$HOST_TAB" >/dev/null 2>&1 || true
   [ -z "$HOST_SESSION_FILE" ] || rm -f "$HOST_SESSION_FILE"
