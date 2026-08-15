@@ -34,8 +34,10 @@
 #   herdr-meat-review watch  --notify PANE [--cwd DIR]
 #   herdr-meat-review host   TAB PANE [--notify PANE] [-- TUICR-ARG...]
 #                            (internal; runs in the pane)
+#   herdr-meat-review version
 #
-# Every subcommand prints one JSON object on stdout; `watch' prints nothing.
+# Every subcommand prints one JSON object on stdout; `watch' and `version'
+# print a bare line.
 
 set -euo pipefail
 
@@ -96,8 +98,30 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is not on PATH"
 }
 
+version() {
+  # Read rather than baked in, from the one file that carries the number.
+  # `bin/..' is the repository root in a checkout and the package root once
+  # installed, because the script keeps its place under bin/ in both.
+  #
+  # A caller comparing versions needs an answer even from a tree that has no
+  # VERSION file, and a tool that refused to start over its own label would be
+  # worse than one that admits it does not know.
+  local file
+  file=$(dirname "$(self)")/../VERSION
+  if [ -r "$file" ]; then
+    tr -d '[:space:]' <"$file"
+    printf '\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
 usage() {
-  sed -n '/^# Usage:/,/^# Every/p' "$(self)" | sed 's/^# \{0,1\}//'
+  # To the end of the header block rather than to a word in it: a range that
+  # ends on a phrase stops at the first line carrying it, so a sentence that
+  # grows a second line loses it silently.
+  printf 'herdr-meat-review %s\n\n' "$(version)"
+  sed -n '/^# Usage:/,/^$/p' "$(self)" | sed 's/^# \{0,1\}//'
 }
 
 # Resolving what to act on ----------------------------------------------------
@@ -910,6 +934,7 @@ main() {
     marks) cmd_marks "$@" ;;
     watch) cmd_watch "$@" ;;
     host) cmd_host "$@" ;;
+    version | --version | -V) version ;;
     -h | --help | help | '') usage ;;
     *) die "unknown command $command" ;;
   esac

@@ -24,7 +24,10 @@ herdr-meat-review open -- -r HEAD~3..HEAD  # anything after -- is tuicr's
 herdr-meat-review status                   # {} once the operator is done
 herdr-meat-review close                    # for a review somebody walked away from
 herdr-meat-review marks                    # what has been reviewed so far
+herdr-meat-review version                  # what this copy is
 ```
+
+What changed between versions is in [CHANGELOG.md](CHANGELOG.md).
 
 With no arguments, a review shows **what has arrived since the last one**.
 Each review leaves a marker at the commit it opened on, under

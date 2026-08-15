@@ -85,3 +85,15 @@ check is to break the thing on purpose and run the suite:
 # delete the claim-verify block from bin/herdr-meat-review, then:
 just test race     # should report the stand-down test failing
 ```
+
+## Releasing
+
+`VERSION` holds the number. The nix package reads it, the script reads it to
+answer `version`, and a passthru test fails if the installed tool disagrees
+with the package — so there is nowhere else to change.
+
+A change that anyone using the tool would notice goes in `CHANGELOG.md` under
+a new heading, with `VERSION` bumped to match in the same commit. While the
+major version is 0, anything a consumer could be relying on bumps the minor:
+that includes wake wording, since agents are told to read it, and the fields
+`open` prints, since callers parse them.

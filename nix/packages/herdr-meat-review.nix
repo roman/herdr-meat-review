@@ -44,13 +44,18 @@ let
 
   package = stdenv.mkDerivation {
     pname = "herdr-meat-review";
-    version = "0.2.0";
+    # The same file the script reads to answer `version', so the number a
+    # consumer pins and the number the tool reports cannot disagree.
+    version = lib.strings.trim (builtins.readFile ../../VERSION);
 
-    # The script and nothing else, so that a change to the documentation or
-    # the suite does not rebuild every consumer of the tool.
+    # The script and the number it reports, and nothing else, so that a change
+    # to the documentation or the suite does not rebuild every consumer.
     src = lib.fileset.toSource {
       root = ../..;
-      fileset = ../../bin;
+      fileset = lib.fileset.unions [
+        ../../bin
+        ../../VERSION
+      ];
     };
 
     nativeBuildInputs = [ makeWrapper ];
@@ -69,6 +74,13 @@ let
     installPhase = ''
       runHook preInstall
       install -Dm755 bin/herdr-meat-review $out/bin/herdr-meat-review
+      # Beside bin/ rather than inside it: the script looks for the file one
+      # level up from itself, which is the repository root in a checkout, so
+      # one lookup serves both.  The cost is a generically-named file at the
+      # package root, which collides in a profile with any other package that
+      # installs one; share/ would avoid that at the price of the checkout and
+      # the install no longer agreeing on a path.
+      install -Dm644 VERSION $out/VERSION
       wrapProgram $out/bin/herdr-meat-review \
         --prefix PATH : ${lib.makeBinPath runtimeTools}
       runHook postInstall
@@ -80,6 +92,18 @@ let
       runs = runCommand "herdr-meat-review-runs-test" { } ''
         ${package}/bin/herdr-meat-review --help > help.txt
         grep -Fq "herdr-meat-review open" help.txt
+        touch $out
+      '';
+
+      # The number reaches the installed tool.  It is read from a file beside
+      # the script rather than compiled in, so wrapping or installing the one
+      # without the other leaves a tool that cannot say what it is.
+      reports-its-version = runCommand "herdr-meat-review-version-test" { } ''
+        got=$(${package}/bin/herdr-meat-review version)
+        [ "$got" = "${package.version}" ] || {
+          echo "reported '$got', packaged as '${package.version}'" >&2
+          exit 1
+        }
         touch $out
       '';
     };

@@ -974,6 +974,48 @@ test_host_names_the_checkout_it_searched_when_no_session_registered() {
   assert_contains "$(prompts)" "$dir" "the checkout it searched"
 }
 
+# The number it answers to -----------------------------------------------------
+
+test_version_is_the_one_in_the_version_file() {
+  # One file carries the number, and both the tool and the nix package read
+  # it.  A copy anywhere else is a second answer waiting to be given.
+  local declared
+  declared=$(tr -d '[:space:]' <"$ROOT/VERSION")
+  assert_equal "$declared" "$("$REVIEW" version)" "version"
+  assert_equal "$declared" "$("$REVIEW" --version)" "--version"
+  assert_equal "$declared" "$("$REVIEW" -V)" "-V"
+}
+
+test_usage_says_which_version_it_is() {
+  # Whoever is reading the usage is deciding whether their problem is one this
+  # copy already fixed.
+  local declared
+  declared=$(tr -d '[:space:]' <"$ROOT/VERSION")
+  assert_contains "$("$REVIEW" --help)" "herdr-meat-review $declared" "usage"
+}
+
+test_usage_carries_the_whole_header() {
+  # The usage is cut out of the header comment by a line range, so a sentence
+  # that grows a second line, or a subcommand added below the range's end,
+  # goes missing from the help without anything failing.
+  local help
+  help=$("$REVIEW" --help)
+  assert_contains "$help" "herdr-meat-review open" "first subcommand"
+  assert_contains "$help" "herdr-meat-review version" "last subcommand"
+  assert_contains "$help" "print a bare line." "the end of the header"
+}
+
+test_version_admits_when_it_cannot_tell() {
+  # A tree with no VERSION beside the script still has to run.  Refusing to
+  # start over a missing label would be worse than saying the label is
+  # missing.
+  local dir
+  dir=$HERDR_STUB_STATE/loose/bin
+  mkdir -p "$dir"
+  cp "$REVIEW" "$dir/herdr-meat-review"
+  assert_equal unknown "$("$dir/herdr-meat-review" version)" "version"
+}
+
 # Running them ---------------------------------------------------------------
 
 main() {
