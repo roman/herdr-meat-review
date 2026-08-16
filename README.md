@@ -19,7 +19,7 @@ The meat is you. It is meant to be a little rude.
 one is still open, and closes one nobody finished.
 
 ```bash
-herdr-meat-review open                     # the working tree of this workspace
+herdr-meat-review open                     # what this workspace has committed since
 herdr-meat-review open -- -r HEAD~3..HEAD  # anything after -- is tuicr's
 herdr-meat-review status                   # {} once the operator is done
 herdr-meat-review close                    # for a review somebody walked away from
@@ -35,9 +35,14 @@ Each review leaves a marker at the commit it opened on, under
 does not mean reading it twice. The first review has no marker to start
 from and uses the branch point instead: everything this branch has that the
 default one does not. On the default branch there is no branch point, so a
-first review there is the working tree alone — `open` reports that as
-`"empty": true` rather than leaving you to find out from a tab that closed
-itself.
+first review there shows what you have not pushed.
+
+**Reviews show committed work only.** A working repository is dirty nearly all
+the time, and what is dirty in it is rarely the change under review — so
+sending it along would spend the reviewer's attention on unrelated files, every
+round. Commit first, and put the work in its own commit. A review with nothing
+committed reports `"empty": true` and says so, rather than leaving you to find
+out from a tab that closed itself.
 
 `open` creates a tab called `review` in the workspace, starts tuicr in it, and
 prints the pane and tab it used. Quitting the tuicr TUI closes that tab again.
@@ -102,12 +107,11 @@ From Emacs, if you use herdr.el — it ships the panel and the commands. See
 first and reports `"reused": true`. Two open reviews of one checkout is more
 than most people can hold at once.
 
-**Markers track commits, not the working tree.** Uncommitted work is shown
-every review, because nothing can record that you saw it — commit before
-asking for a review and the marker does its job. And the marker only holds
-if the commits under it stay put: amending or rebasing at or below the
-newest one replays everything already read. Tidy the branch after the last
-review, not between two.
+**Markers track commits, and so does a review.** Nothing can record that
+uncommitted work was seen, which is why it is left out entirely rather than
+shown again every round. The marker only holds if the commits under it stay
+put: amending or rebasing at or below the newest one replays everything
+already read. Tidy the branch after the last review, not between two.
 
 **The summary line counts what the review shows.** It asks git about the
 same selectors tuicr was given, so a review of a range counts that range,

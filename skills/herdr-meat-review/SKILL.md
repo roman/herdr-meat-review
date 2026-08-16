@@ -120,21 +120,33 @@ there. `herdr-meat-review marks` lists them.
 The first review of a branch has no marker to start from, so it uses the
 branch point: everything the branch has that the default one does not.
 
-**On the default branch itself there is no branch point**, so a first review
-there is the working tree and nothing else. The same happens where the
-default branch cannot be worked out at all — `origin/HEAD` is set by `git
-clone` and by nothing else, so a repository that started local and is not on
-`main` or `master` has nothing to measure against. Both show up as
-`"empty": true`, and the answer is to name a range yourself:
+**On the default branch itself there is no branch point** — its merge base
+with itself is its own tip — so a first review there shows what you have not
+pushed. That is the same question asked a different way, and it is the right
+one for work done straight on `main`.
+
+Where neither exists — no marker, no branch point, no upstream — the review
+is empty, and you name a range yourself:
 
 ```bash
 herdr-meat-review open --cwd "$PWD" -- --revisions <the commits you want>..HEAD
 ```
 
-Uncommitted work is shown every time, because nothing can record that it was
-seen. **So commit before asking for a review.** Work you leave uncommitted
-is read once now and again in the next review, and the reviewer will not
-know which parts they have already been through.
+### Reviews show committed work only
+
+Uncommitted and untracked files never reach the reviewer. **So commit before
+asking for a review**, and put the work in its own commit.
+
+This is not bookkeeping. A working repository is dirty nearly all the time,
+and what is dirty in it is rarely the change under review — a scratch file, an
+experiment, a half-finished edit in another subsystem. Sending those along
+makes the reviewer work out which parts they were meant to read, and they pay
+that on every round, because nothing can record that uncommitted work was
+seen.
+
+If a review comes back `"empty": true` with the summary `nothing committed to
+review: commit the work first`, that is exactly what happened: the change is
+sitting in the working tree. Commit it and open the review again.
 
 That leaves one rule, and it is the whole reason this works:
 

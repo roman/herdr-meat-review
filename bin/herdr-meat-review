@@ -17,9 +17,14 @@
 #
 # With no tuicr arguments, a review shows what has arrived since the last
 # one: each review leaves a marker under refs/reviews/<n>, and the next
-# starts there.  The first review of a branch has no marker and uses the
-# branch point instead.  Uncommitted work is always shown, because no
-# marker can record that it was seen.
+# starts there.  Before there is a marker it uses the branch point, or on
+# the default branch what has not been pushed.
+#
+# Committed work only.  A working repository is dirty nearly all the time,
+# and what is dirty in it is rarely the change under review, so showing it
+# would spend the reviewer's attention on unrelated files every round.
+# Commit before asking; a review with nothing committed reports itself
+# empty and says so.
 #
 # A review opened from an agent's pane watches itself, and wakes that agent
 # when the reviewer writes something and again when the review closes.  So
@@ -285,6 +290,23 @@ branch_point() {
   git -C "$dir" merge-base HEAD "$base" 2>/dev/null
 }
 
+upstream_point() {
+  # What this branch has that its remote does not.
+  #
+  # This is the answer on the default branch, where there is no branch
+  # point: main's merge base with main is main's own tip, so nothing is
+  # ever between them.  Plenty of work is done straight on the default
+  # branch, and for that work "not yet pushed" is exactly "not yet seen".
+  local dir=$1
+  git -C "$dir" rev-parse --verify -q '@{upstream}' 2>/dev/null
+}
+
+same_commit() {
+  local dir=$1
+  [ "$(git -C "$dir" rev-parse "$2" 2>/dev/null)" = \
+    "$(git -C "$dir" rev-parse "$3" 2>/dev/null)" ]
+}
+
 review_start() {
   # Where this review begins: the newest thing already seen.
   #
@@ -298,17 +320,43 @@ review_start() {
   # right answer, not the branch point: what lies between them is default
   # branch work that landed after the last review, and nobody has read
   # that either.
-  local dir=$1 last
+  local dir=$1 last point
   last=$(last_mark "$dir")
   if [ -n "$last" ] && is_ancestor "$dir" "refs/reviews/$last" HEAD; then
     printf '%s\n' "refs/reviews/$last"
     return 0
   fi
-  branch_point "$dir"
+
+  # The branch point, where there is one that is not simply HEAD.
+  point=$(branch_point "$dir") || point=
+  if [ -n "$point" ] && ! same_commit "$dir" "$point" HEAD; then
+    printf '%s\n' "$point"
+    return 0
+  fi
+
+  # On the default branch there is no point of departure, so fall back to
+  # what has not been pushed.  Checked for ancestry like the marker above:
+  # a remote that has moved ahead names a commit this branch does not
+  # contain, and a range from there reads as a deletion.
+  point=$(upstream_point "$dir") || return 1
+  same_commit "$dir" "$point" HEAD && return 1
+  is_ancestor "$dir" "$point" HEAD || return 1
+  printf '%s\n' "$point"
 }
 
 unreviewed_args() {
   # The tuicr arguments for everything not yet reviewed, one per line.
+  #
+  # Committed work only.  A working repository is dirty nearly all the
+  # time, and what is dirty in it is almost never the change being
+  # reviewed: a scratch file, an unrelated experiment, a half-finished
+  # edit somewhere else entirely.  Sending those to a reviewer makes them
+  # work out which parts they were meant to read, and they pay that on
+  # every round because nothing can record that uncommitted work was seen.
+  #
+  # So the change under review is whatever has been committed for it.  That
+  # is a demand on the caller -- commit before asking -- and the empty
+  # review below is what tells them they have not.
   #
   # A review that comes out empty is left empty rather than widened: the
   # caller reports that, and showing the whole history instead would make
@@ -316,15 +364,26 @@ unreviewed_args() {
   local dir=$1 from
   if ! git_repo "$dir" || ! git -C "$dir" rev-parse --verify -q HEAD >/dev/null
   then
+    # Nothing has ever been committed here, so there is no history to be
+    # confused with and nothing else to show.
     printf -- '--working-tree\n'
     return 0
   fi
   from=$(review_start "$dir") || from=
-  if [ -n "$from" ] && [ "$(git -C "$dir" rev-parse "$from")" != \
-                         "$(git -C "$dir" rev-parse HEAD)" ]; then
+  if [ -n "$from" ]; then
     printf -- '--revisions\n%s..HEAD\n' "$from"
+    return 0
   fi
-  printf -- '--working-tree\n'
+  # Nothing new is committed.  Name the empty range rather than passing no
+  # selector at all: tuicr is given something it can measure, and the
+  # review reports itself empty instead of falling open on the whole tree.
+  printf -- '--revisions\nHEAD..HEAD\n'
+}
+
+dirty_tree() {
+  local dir=$1
+  git_repo "$dir" || return 1
+  [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]
 }
 
 review_files() {
@@ -724,15 +783,23 @@ cmd_open() {
   # is given nothing, which closes the tab and releases the pane, so a
   # caller that only read "reused": false would report a review waiting
   # that had already gone.
-  local summary
+  local summary empty=false
   summary=$(changed_summary "$directory" "${review_args[@]}")
+  if [ "$summary" = 'nothing to review' ]; then
+    empty=true
+    # An empty review in a dirty checkout is one mistake, not two: the work
+    # is there but uncommitted, and reviews show committed work. Saying so
+    # beats leaving the caller to wonder where their change went.
+    if dirty_tree "$directory"; then
+      summary='nothing committed to review: commit the work first'
+    fi
+  fi
   # The root rather than the directory opened: this is the value a caller
   # needs to find the session again, and tuicr will only answer to the path it
   # filed one under.
   jq -n --arg pane "$pane" --arg tab "$tab" --arg cwd "$review_root" \
         --arg summary "$summary" \
-        --argjson empty "$([ "$summary" = 'nothing to review' ] &&
-                           printf true || printf false)" \
+        --argjson empty "$empty" \
         --argjson notified "$([ -n "$notify" ] && printf true || printf false)" \
     '{pane_id: $pane, tab_id: $tab, cwd: $cwd, reused: false,
       summary: $summary, empty: $empty, notified: $notified}'

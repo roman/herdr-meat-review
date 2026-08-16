@@ -9,6 +9,34 @@ consumer could be relying on bumps the minor. That includes the wording of a
 wake, since agents are told to read it, and the fields `open` prints, since
 callers parse them.
 
+## 0.4.0 — 2026-08-16
+
+### Changed
+
+- A review shows committed work only. Uncommitted and untracked files no
+  longer reach the reviewer.
+
+  A working repository is dirty nearly all the time, and what is dirty in it
+  is rarely the change under review — a scratch file, an experiment, a
+  half-finished edit elsewhere. Sending those along made the reviewer work out
+  which parts they were meant to read, and they paid it on every round,
+  because nothing can record that uncommitted work was seen. Commit before
+  asking for a review, and put the work in its own commit.
+
+- A first review on the default branch shows what has not been pushed, rather
+  than the working tree.
+
+  The default branch has no branch point — its merge base with itself is its
+  own tip — so there was no range and the review fell back to the working
+  tree alone. On a branch with commits waiting to be pushed that meant the
+  committed work was left out of its own review while unrelated dirt was put
+  in. Work done straight on `main` is common enough that it deserves the
+  honest answer, and "not yet pushed" is it.
+
+- `open` reports `nothing committed to review: commit the work first` when a
+  review comes out empty in a dirty checkout, instead of the bare `nothing to
+  review`. That is nearly always what happened, and the summary now says so.
+
 ## 0.3.0 — 2026-08-15
 
 ### Added

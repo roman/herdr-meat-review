@@ -126,6 +126,22 @@ repo() {
   printf '%s\n' "$dir"
 }
 
+set_upstream() {
+  # Give the current branch a remote-tracking branch at HEAD, the way a
+  # push would leave it.
+  #
+  # The url and the fetch refspec are both needed: without them `@{upstream}'
+  # will not resolve however the branch config reads, because git has no way
+  # to map a branch on the remote to a ref under refs/remotes.
+  local dir=$1 branch
+  branch=$(git -C "$dir" symbolic-ref --short HEAD)
+  git -C "$dir" config remote.origin.url .
+  git -C "$dir" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+  git -C "$dir" config "branch.$branch.remote" origin
+  git -C "$dir" config "branch.$branch.merge" "refs/heads/$branch"
+  git -C "$dir" update-ref "refs/remotes/origin/$branch" HEAD
+}
+
 commit_in() {
   local dir=$1 message=$2
   printf '%s\n' "$message" >>"$dir/file"
@@ -442,24 +458,67 @@ test_open_says_when_the_review_it_opened_is_empty() {
   assert_equal true "$(printf '%s' "$reply" | jq -r .empty)" "empty"
   assert_equal 'nothing to review' \
     "$(printf '%s' "$reply" | jq -r .summary)" "summary"
-  printf 'dirty\n' >"$dir/file"
   "$REVIEW" close --workspace w1 >/dev/null
+  commit_in "$dir" two
   reply=$("$REVIEW" open --workspace w1)
   assert_equal false "$(printf '%s' "$reply" | jq -r .empty)" "not empty"
 }
 
-test_open_on_the_default_branch_has_no_branch_point_to_use() {
-  # main's merge-base with main is main, so there is no range and the
-  # review is the working tree.  Naming the whole history instead would
-  # make a first review unreadable in any repository with a past.
+test_open_says_to_commit_when_the_work_is_only_uncommitted() {
+  # The likeliest reason a review comes out empty is that the operator has
+  # the change in front of them, uncommitted, and reviews show commits.
+  # An unexplained "nothing to review" sends them looking for a bug.
+  local dir reply
+  dir=$(repo)
+  printf 'work in progress\n' >"$dir/file"
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal true "$(printf '%s' "$reply" | jq -r .empty)" "empty"
+  assert_contains "$(printf '%s' "$reply" | jq -r .summary)" 'commit' "summary"
+}
+
+test_open_never_shows_uncommitted_work() {
+  # The whole point of this change. A working repository is dirty nearly
+  # all the time, and those files are somebody else's business -- an
+  # unrelated experiment, a scratch note, an edit in another subsystem.
+  # Putting them in a review costs the reviewer the job of working out
+  # which parts they were meant to read.
   local dir
   dir=$(repo)
+  git -C "$dir" checkout -q -b feature
+  commit_in "$dir" the-actual-work
+  printf 'scratch\n' >"$dir/unrelated-untracked"
+  printf 'half done\n' >>"$dir/file"
+  "$REVIEW" open --workspace w1 >/dev/null
+  case "$(host_command)" in
+    *--working-tree*) fail "the working tree reached the reviewer" ;;
+  esac
+  assert_contains "$(host_command)" '--revisions' "range"
+}
+
+test_open_on_the_default_branch_shows_what_is_not_pushed() {
+  # main's merge base with main is main's own tip, so there is no branch
+  # point. Plenty of work happens straight on the default branch, and for
+  # it "not yet pushed" is what "not yet seen" means.
+  local dir pushed
+  dir=$(repo)
+  set_upstream "$dir"
+  pushed=$(git -C "$dir" rev-parse HEAD)
   commit_in "$dir" two
   "$REVIEW" open --workspace w1 >/dev/null
-  assert_contains "$(host_command)" '--working-tree' "working tree"
+  assert_contains "$(host_command)" "$pushed..HEAD" "range"
   case "$(host_command)" in
-    *--revisions*) fail "the default branch was reviewed against itself" ;;
+    *--working-tree*) fail "the working tree reached the reviewer" ;;
   esac
+}
+
+test_open_on_the_default_branch_with_nothing_unpushed_is_empty() {
+  # Everything committed is already on the remote, so there is nothing
+  # nobody has seen. Better an empty review than the whole working tree.
+  local dir reply
+  dir=$(repo)
+  set_upstream "$dir"
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal true "$(printf '%s' "$reply" | jq -r .empty)" "empty"
 }
 
 test_open_prefers_the_last_marker_to_the_branch_point() {
@@ -477,17 +536,19 @@ test_open_prefers_the_last_marker_to_the_branch_point() {
   assert_contains "$(host_command)" 'refs/reviews/1..HEAD' "range"
 }
 
-test_open_shows_the_working_tree_when_nothing_was_committed() {
-  # Nothing can record that uncommitted work was seen, so an empty range
-  # is left out rather than passed to tuicr as HEAD..HEAD.
-  local dir
+test_open_is_empty_when_nothing_new_was_committed() {
+  # A second review with no commits between it and the first has nothing
+  # to say. It reports empty rather than falling back to the working tree,
+  # which would show unrelated dirt and read as if it were the change.
+  local dir reply
   dir=$(repo)
   "$REVIEW" open --workspace w1 >/dev/null
   "$REVIEW" close --workspace w1 >/dev/null
-  "$REVIEW" open --workspace w1 >/dev/null
-  assert_contains "$(host_command)" '--working-tree' "working tree"
+  printf 'unrelated\n' >"$dir/scratch"
+  reply=$("$REVIEW" open --workspace w1)
+  assert_equal true "$(printf '%s' "$reply" | jq -r .empty)" "empty"
   case "$(host_command)" in
-    *--revisions*) fail "an empty range was passed to tuicr" ;;
+    *--working-tree*) fail "the working tree reached the reviewer" ;;
   esac
 }
 
