@@ -9,6 +9,23 @@ consumer could be relying on bumps the minor. That includes the wording of a
 wake, since agents are told to read it, and the fields `open` prints, since
 callers parse them.
 
+## 0.5.0 — 2026-08-16
+
+### Changed
+
+- The skill tells the agent to name the range on the first review of a
+  session, rather than relying on the marker the previous review left behind.
+
+  A marker records where the last review happened. That is where the session
+  began only when every commit gets reviewed, and commits land between reviews
+  routinely: an earlier session that opened none, a fix pushed straight to the
+  default branch, a merge. All of it sat after the newest marker, so it
+  arrived in the next review beside a change it had nothing to do with, and
+  the reviewer had to work out which files were meant for them. Nothing in the
+  repository records where a session started, so the agent is the only party
+  that can supply it. Later rounds still take the marker, which by then sits
+  on the session's own work.
+
 ## 0.4.0 — 2026-08-16
 
 ### Changed

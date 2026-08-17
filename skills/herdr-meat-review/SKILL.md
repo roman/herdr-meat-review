@@ -110,27 +110,46 @@ your own pane: herdr puts the pane id in your environment, and `open` records
 it as the one to wake. **So run `open` yourself.** A review opened any other
 way has no agent behind it and wakes nobody.
 
-### Each review picks up where the last one left off
+### Scope the first review to this session's own commits
 
-With no tuicr arguments, `open` shows what has arrived since the previous
-review — not the whole branch again. Every review leaves a marker at the
-commit it opened on, under `refs/reviews/<n>`, and the next one starts
-there. `herdr-meat-review marks` lists them.
+The reviewer wants to see what this session changed. Nothing in the repository
+records where a session began, so `open` cannot work it out. You can, because
+you made the commits.
 
-The first review of a branch has no marker to start from, so it uses the
-branch point: everything the branch has that the default one does not.
-
-**On the default branch itself there is no branch point** — its merge base
-with itself is its own tip — so a first review there shows what you have not
-pushed. That is the same question asked a different way, and it is the right
-one for work done straight on `main`.
-
-Where neither exists — no marker, no branch point, no upstream — the review
-is empty, and you name a range yourself:
+**On the first review of a session, name the range yourself.** Take the oldest
+commit this session created and review from its parent:
 
 ```bash
-herdr-meat-review open --cwd "$PWD" -- --revisions <the commits you want>..HEAD
+herdr-meat-review open --cwd "$PWD" -- --revisions <oldest-session-commit>~1..HEAD
 ```
+
+For a single commit that is `--revisions HEAD~1..HEAD`.
+
+Leave the range off and `open` falls back to a marker, which is only as good
+as the last review. Work lands between reviews all the time: an earlier
+session that fixed something without opening one, a commit pushed straight to
+the default branch, a merge. All of it sits after the newest marker and comes
+along with your change. The reviewer then has to work out which files were
+meant for them, which is the cost this tool exists to remove.
+
+### Later rounds pick up where the last one left off
+
+Every review leaves a marker at the commit it opened on, under
+`refs/reviews/<n>`. `herdr-meat-review marks` lists them.
+
+Once the session's first review has run, its marker sits on your own work. The
+default range is correct from then on, so open round two with no tuicr
+arguments and the reviewer sees only what arrived since they last looked.
+
+Two fallbacks cover a branch with no marker at all. `open` uses the branch
+point, meaning everything the branch has that the default one does not. On the
+default branch there is no branch point — its merge base with itself is its
+own tip — so it shows what has not been pushed instead. Both are reasonable
+guesses about where your work started, and both are still guesses. Name the
+range when you know it.
+
+Where none of them exists — no marker, no branch point, no upstream — the
+review is empty until you name a range.
 
 ### Reviews show committed work only
 
