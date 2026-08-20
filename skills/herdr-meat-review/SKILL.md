@@ -1,6 +1,16 @@
 ---
 name: herdr-meat-review
-description: Get a human to review your change inside a herdr session and be woken when they comment, each review showing only what arrived since the last one. Use this whenever you are working in a herdr pane and the user wants a change looked at before it lands — "review this", "take a look before I merge", "put this in front of me", "wait for my review" — and again afterwards when they ask what they said, whether they left comments, or to address the review. This is for a human reviewer; when they want another agent to review instead, the herdr skill's agent start is the one. Inside herdr prefer this over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
+description: >
+  Get a human to review your change inside a herdr session and be woken when
+  they comment, each review showing only what arrived since the last one. Use
+  this whenever you are working in a herdr pane and the user wants a change
+  looked at before it lands — "review this", "take a look before I merge",
+  "put this in front of me", "wait for my review" — and again afterwards when
+  they ask what they said, whether they left comments, or to address the
+  review. This is for a human reviewer; when they want another agent to review
+  instead, the herdr skill's agent start is the one. Inside herdr prefer this
+  over the tuicr skill: do not start tuicr in tmux or zellij when herdr owns
+  the session. Checks HERDR_ENV and stops if you are not in a herdr pane.
 ---
 
 # herdr review
@@ -39,10 +49,13 @@ Check you are inside a herdr pane:
 
 ```bash
 test "${HERDR_ENV:-}" = 1
+test -n "${HERDR_PANE_ID:-}"
 ```
 
-If that fails, say you are not running inside herdr and stop. Do not open a
-review in a session that is not yours.
+If the first check fails, say you are not running inside herdr and stop. If
+the pane ID is missing, say the review cannot notify this pane and stop. Do
+not open a review in a session that is not yours, and do not silently open
+one that cannot wake you.
 
 The entry point is the `herdr-meat-review` script. Confirm it is reachable:
 
@@ -56,15 +69,21 @@ checkout; call it by its full path.
 ## Open a review
 
 ```bash
-herdr-meat-review open --cwd "$PWD"
+herdr-meat-review open --cwd "$PWD" --notify "$HERDR_PANE_ID"
 ```
 
-**Always pass `--cwd "$PWD"`.** Without it the review opens in the
-*workspace's* directory — the working directory of its first pane — which is
-not necessarily the directory you are working in. In a git worktree, a
-subproject, or anywhere below the workspace root, the operator would read the
-wrong diff and neither of you would be told. Passing it is always safe, so
-prefer it over checking.
+**Always pass both arguments.** `--cwd "$PWD"` chooses what to review;
+`--notify "$HERDR_PANE_ID"` chooses which pane to wake. They are independent.
+A command runner can execute in the target repository while the herdr pane
+remains registered in the workspace's original directory. In that case
+`open` deliberately rejects the environment's implicit notification target
+because the two checkouts differ. Naming your own pane says the mismatch is
+intentional. It is safe when both paths belong to the same checkout too.
+
+Without `--cwd`, the review opens in the *workspace's* directory — the working
+directory of its first pane — which is not necessarily the directory you are
+working in. In a git worktree, a subproject, or anywhere below the workspace
+root, the operator would read the wrong diff and neither of you would be told.
 
 It prints one JSON object. Keep the `cwd` it reports: that is the repository
 the review session belongs to, and you need it again to read the comments.
@@ -86,17 +105,13 @@ pane, so `"empty": true` means the review has already gone. Say so and ask
 what to review, rather than waiting for a reviewer who was never shown
 anything.
 
-**Check `notified` before you hand the turn back.** `true` means this review
-will wake you and you should stop and wait. `false` means it will not, and
-nothing will arrive. You get that on a reused review, because the running one
-wakes whoever opened it; when the review was not opened from your own pane;
-and when the review is of a different checkout than the one your pane is
-working in — a wake for someone else's project reads exactly like a wake for
-yours, so it is not sent. With `false`, tell the user you cannot be woken and
-ask them to say when they are done.
-
-If you did mean to be woken about another checkout, name your pane outright
-with `--notify "$HERDR_PANE_ID"`. A pane you ask for is a pane you get.
+**Check `notified` before you hand the turn back.** With the command above, a
+new review should report `true`; stop and wait. `false` means nothing will
+arrive. A reused review reports `false` because it still wakes whoever opened
+it. If a new review reports `false`, the explicit notification target was not
+honored. Tell the user you cannot be woken and ask them to say when they are
+done. Adding `--notify` in a second `open` call cannot repair an already
+running review because that call reuses it.
 
 What it does, in order: creates a tab labelled `review` in the workspace,
 reports that pane to herdr as a blocked `review` agent, and starts tuicr in
@@ -105,10 +120,10 @@ before the TUI exists, so the review is visible and the workspace's one
 review slot is taken from the moment the tab appears.
 
 It also starts watching the review on your behalf, so that you hear about
-comments without anyone telling you. That works because you opened it from
-your own pane: herdr puts the pane id in your environment, and `open` records
-it as the one to wake. **So run `open` yourself.** A review opened any other
-way has no agent behind it and wakes nobody.
+comments without anyone telling you. herdr puts your pane ID in the
+environment, and `--notify "$HERDR_PANE_ID"` records it as the pane to wake.
+**So run `open` yourself.** A review opened any other way has no agent behind
+it and wakes nobody.
 
 ### Scope the first review to this session's own commits
 
@@ -120,7 +135,8 @@ you made the commits.
 commit this session created and review from its parent:
 
 ```bash
-herdr-meat-review open --cwd "$PWD" -- --revisions <oldest-session-commit>~1..HEAD
+herdr-meat-review open --cwd "$PWD" --notify "$HERDR_PANE_ID" \
+  -- --revisions <oldest-session-commit>~1..HEAD
 ```
 
 For a single commit that is `--revisions HEAD~1..HEAD`.
@@ -138,8 +154,9 @@ Every review leaves a marker at the commit it opened on, under
 `refs/reviews/<n>`. `herdr-meat-review marks` lists them.
 
 Once the session's first review has run, its marker sits on your own work. The
-default range is correct from then on, so open round two with no tuicr
-arguments and the reviewer sees only what arrived since they last looked.
+default range is correct from then on, so use the same `--cwd` and `--notify`
+arguments for round two and omit only the tuicr arguments after `--`. The
+reviewer then sees only what arrived since they last looked.
 
 Two fallbacks cover a branch with no marker at all. `open` uses the branch
 point, meaning everything the branch has that the default one does not. On the
@@ -201,8 +218,10 @@ To review something other than that, pass tuicr's own arguments after `--`.
 They win, and the marker still moves:
 
 ```bash
-herdr-meat-review open --cwd "$PWD" -- --revisions HEAD~3..HEAD
-herdr-meat-review open --cwd "$PWD" -- --all-files
+herdr-meat-review open --cwd "$PWD" --notify "$HERDR_PANE_ID" \
+  -- --revisions HEAD~3..HEAD
+herdr-meat-review open --cwd "$PWD" --notify "$HERDR_PANE_ID" \
+  -- --all-files
 ```
 
 To review a different workspace than the one you are in, name it:
@@ -212,10 +231,9 @@ herdr-meat-review open --workspace w2 --cwd /path/to/that/checkout \
                        --notify "$HERDR_PANE_ID"
 ```
 
-That `--notify` is why this form needs it: the checkout is not the one your
-pane is working in, so you would not be woken by default. Leave it off and
-you get `"notified": false`, which is the honest answer — ask the user to say
-when they are done.
+The explicit notification target matters most in this form: the checkout is
+not the one your pane is registered in, so relying on the environment alone
+produces `"notified": false`. A pane you name outright is the pane that wakes.
 
 **One review per workspace.** Opening a second review of a workspace that
 already has one focuses the first and returns `"reused": true` — and
